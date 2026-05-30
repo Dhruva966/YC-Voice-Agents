@@ -1,13 +1,14 @@
-PYTHON ?= .venv/bin/python
+PYTHON ?= python3
+VENV_PYTHON ?= .venv/bin/python
 
-.PHONY: dev install run-backend run-frontend seed validate build vanguard improve migrate
+.PHONY: dev install run-backend run-frontend seed validate validate-vanguard migrate build build-status vanguard vanguard-status improve dashboard status
 
 # ─── Local Dev (no Docker) ──────────────────────────────────────────────────
 install:
-	python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+	python3 -m venv .venv && $(VENV_PYTHON) -m pip install -r requirements.txt
 
 run-backend:
-	.venv/bin/uvicorn api.main:app --reload --port 8000
+	$(VENV_PYTHON) -m uvicorn api.main:app --reload --port 8000
 
 run-frontend:
 	cd frontend && npm install && npm run dev
