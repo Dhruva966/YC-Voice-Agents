@@ -206,7 +206,7 @@ function Card({
   children, style,
 }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, ...style }}>
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16, ...style }}>
       {children}
     </div>
   );
@@ -216,7 +216,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
       fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
-      color: C.brandLt, textTransform: "uppercase", marginBottom: 10,
+      color: "var(--clay)", textTransform: "uppercase", marginBottom: 10,
+      fontFamily: "var(--font-mono)",
     }}>
       {children}
     </div>
@@ -228,11 +229,11 @@ function PassRateRing({ rate, size = 72 }: { rate: number; size?: number }) {
   const r    = (size - 10) / 2;
   const circ = 2 * Math.PI * r;
   const off  = circ * (1 - rate / 100);
-  const clr  = rate >= 80 ? C.success : rate >= 50 ? C.warning : C.error;
+  const clr  = rate >= 80 ? "var(--status-green)" : rate >= 50 ? "var(--status-amber)" : "var(--status-red)";
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
       style={{ transform: "rotate(-90deg)", flexShrink: 0 }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={C.border} strokeWidth={8} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth={8} />
       <circle
         cx={size / 2} cy={size / 2} r={r}
         fill="none" stroke={clr} strokeWidth={8}
@@ -616,10 +617,10 @@ export default function Page() {
   }, [statusInfo]);
 
   const statusDotColor =
-    systemStatusColor === "green" ? C.success
-    : systemStatusColor === "amber" ? C.warning
-    : systemStatusColor === "red"   ? C.error
-    : C.text3;
+    systemStatusColor === "green" ? "var(--status-green)"
+    : systemStatusColor === "amber" ? "var(--status-amber)"
+    : systemStatusColor === "red"   ? "var(--status-red)"
+    : "var(--ink-3)";
 
   const activeRun       = run || dashboard.latest_vanguard_run_summary || null;
   const total           = activeRun?.total || 0;
@@ -941,6 +942,7 @@ export default function Page() {
         .forge-nav-btn { display: flex; align-items: center; gap: 9px; padding: 9px 12px; font-size: 13px; color: var(--ink-2); background: transparent; border-radius: var(--radius-sm); border: none; cursor: pointer; text-align: left; transition: all 0.15s; width: 100%; }
         .forge-nav-btn:hover { background: var(--surface); color: var(--ink); }
         .forge-nav-btn.active { background: var(--clay-tint); color: var(--clay-deep); font-weight: 600; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
       `}</style>
       {/* ── SIDEBAR ─────────────────────────────────────── */}
       <aside style={{
@@ -1031,11 +1033,11 @@ export default function Page() {
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 9,
-                background: "linear-gradient(135deg,rgba(124,58,237,0.25),rgba(124,58,237,0.08))",
-                border: "1px solid rgba(124,58,237,0.3)",
+                background: "var(--clay-tint)",
+                border: "1px solid rgba(180, 90, 53, 0.35)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <Zap size={15} color={C.brandLt} />
+                <Zap size={15} color="var(--clay-deep)" />
               </div>
               <div>
                 <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2, letterSpacing: "-0.01em" }}>Build</h2>
@@ -1058,14 +1060,14 @@ export default function Page() {
             onDragLeave={() => setIsDragging(false)}
             onDrop={(e) => { e.preventDefault(); setIsDragging(false); setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files || [])]); }}
             style={{
-              border: `2px dashed ${isDragging ? C.brand : "#1B2F4A"}`,
-              background: isDragging ? "rgba(124,58,237,0.05)" : "linear-gradient(180deg,#0D1222,#080C18)",
-              borderRadius: 12, minHeight: 136,
+              border: `2px dashed ${isDragging ? "var(--clay)" : "var(--border)"}`,
+              background: isDragging ? "var(--clay-tint)" : "var(--surface-2)",
+              borderRadius: "var(--radius-lg)", minHeight: 136,
               display: "flex", flexDirection: "column",
               alignItems: "center", justifyContent: "center",
               padding: 24, marginBottom: 20,
               transition: "all 0.2s",
-              boxShadow: isDragging ? `0 0 0 4px ${C.brandGlow}` : "none",
+              boxShadow: isDragging ? "0 0 0 4px rgba(180,90,53,0.15)" : "none",
             }}
           >
             <label htmlFor="file-input" style={{ cursor: "pointer", width: "100%", textAlign: "center" }}>
@@ -1074,25 +1076,25 @@ export default function Page() {
                   {files.map((file, i) => (
                     <span key={i} style={{
                       display: "inline-flex", alignItems: "center", gap: 5,
-                      background: C.cardUp, border: `1px solid ${C.border}`,
-                      padding: "4px 10px", borderRadius: 6, fontSize: 12, color: C.text,
+                      background: "var(--surface)", border: "1px solid var(--border)",
+                      padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--ink)",
                     }}>
                       {file.name}
                       <button
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }}
-                        style={{ background: "transparent", border: "none", color: C.text3, cursor: "pointer", padding: 0, display: "inline-flex" }}
+                        style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex" }}
                       >
                         <XCircle size={12} />
                       </button>
                     </span>
                   ))}
-                  <span style={{ fontSize: 12, color: C.brandLt, cursor: "pointer" }}>+ Add more</span>
+                  <span style={{ fontSize: 12, color: "var(--clay)", fontWeight: 600, cursor: "pointer" }}>+ Add more</span>
                 </div>
               ) : (
-                <div>
-                  <UploadCloud size={28} color={C.text3} style={{ marginBottom: 10 }} />
-                  <div style={{ fontSize: 13, color: C.text2, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
-                  <div style={{ fontSize: 11, color: C.text3 }}>or click to browse</div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                  <UploadCloud size={28} color="var(--clay)" style={{ marginBottom: 10 }} />
+                  <div style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>or click to browse</div>
                 </div>
               )}
             </label>
@@ -1271,8 +1273,8 @@ export default function Page() {
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 9,
-                background: "linear-gradient(135deg,rgba(34,197,94,0.2),rgba(34,197,94,0.06))",
-                border: "1px solid rgba(34,197,94,0.25)",
+                background: "color-mix(in srgb, var(--status-green) 12%, var(--surface))",
+                border: "1px solid color-mix(in srgb, var(--status-green) 30%, transparent)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
                 <Phone size={15} color="var(--status-green)" />
@@ -1376,8 +1378,8 @@ export default function Page() {
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 9,
-                background: "linear-gradient(135deg,rgba(239,68,68,0.2),rgba(239,68,68,0.06))",
-                border: "1px solid rgba(239,68,68,0.25)",
+                background: "color-mix(in srgb, var(--status-red) 12%, var(--surface))",
+                border: "1px solid color-mix(in srgb, var(--status-red) 30%, transparent)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
                 <Shield size={15} color="var(--status-red)" />
@@ -1506,11 +1508,11 @@ export default function Page() {
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 9,
-                background: `linear-gradient(135deg,rgba(124,58,237,0.2),rgba(124,58,237,0.06))`,
-                border: `1px solid rgba(124,58,237,0.25)`,
+                background: "var(--clay-tint)",
+                border: "1px solid rgba(180, 90, 53, 0.35)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <TrendingUp size={15} color="var(--clay)" />
+                <TrendingUp size={15} color="var(--clay-deep)" />
               </div>
               <div>
                 <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--ink)", margin: 0, fontWeight: 600, lineHeight: 1.2 }}>Improvement Curve</h2>
