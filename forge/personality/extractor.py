@@ -32,20 +32,25 @@ def extract_personality(corpus: str) -> dict[str, Any]:
     trimmed = corpus[:80000]
     prompt = personality_extraction(trimmed)
     client = OpenAI(api_key=os.getenv("NVIDIA_API_KEY"), base_url=os.getenv("NVIDIA_BASE_URL"))
-    response = client.chat.completions.create(
-        model=_persona_model(),
-        messages=[
-            {"role": "system", "content": prompt["system"]},
-            {"role": "user", "content": prompt["user"]},
-        ],
-        temperature=0.1,
-    )
-    raw_output = response.choices[0].message.content or ""
-    cleaned = _strip_json_fences(raw_output)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Failed to parse personality JSON: {raw_output}") from exc
+    last_exc: Exception | None = None
+    raw_output = ""
+    for _attempt in range(2):
+        response = client.chat.completions.create(
+            model=_persona_model(),
+            messages=[
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": prompt["user"]},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw_output = response.choices[0].message.content or ""
+        cleaned = _strip_json_fences(raw_output)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            last_exc = exc
+    raise ValueError(f"Failed to parse personality JSON after 2 attempts: {raw_output}") from last_exc
 
 
 def save_personality_spec(user_id: str, spec: dict[str, Any], s3_client, bucket: str) -> str:

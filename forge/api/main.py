@@ -22,6 +22,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
+from twilio.request_validator import RequestValidator as _TwilioRequestValidator
 from twilio.twiml.voice_response import VoiceResponse
 
 load_dotenv()
@@ -83,13 +84,19 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Forge", version="0.1.0", lifespan=lifespan)
+_allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 class QueuedResponse(BaseModel):
@@ -307,6 +314,15 @@ async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallRes
 
 @app.post("/webhook/twilio/inbound")
 async def twilio_inbound(request: Request) -> Response:
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if auth_token:
+        validator = _TwilioRequestValidator(auth_token)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        url = str(request.url)
+        form_data = dict(await request.form())
+        if not validator.validate(url, form_data, signature):
+            LOGGER.warning("twilio_signature_validation_failed url=%s", url)
+            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     twiml = VoiceResponse()
     connect = twiml.connect()
     connect.stream(url=_twilio_stream_url(request))
@@ -316,12 +332,19 @@ async def twilio_inbound(request: Request) -> Response:
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
     await websocket.accept()
-    raw = await websocket.receive_text()
-    data = json.loads(raw)
-    while data.get("event") != "start":
-        raw = await websocket.receive_text()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
         data = json.loads(raw)
-    stream_sid = data["start"]["streamSid"]
+        attempts = 0
+        while data.get("event") != "start":
+            attempts += 1
+            if attempts > 50:
+                LOGGER.warning("media_stream_no_start_event")
+                await websocket.close(code=1002)
+                return
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            data = json.loads(raw)
+        stream_sid = data["start"]["streamSid"]
     serializer = TwilioFrameSerializer(stream_sid=stream_sid)
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
@@ -397,16 +420,31 @@ async def media_stream(websocket: WebSocket):
     async def on_client_disconnected(transport, client):
         await task.cancel()
 
-    runner = PipelineRunner(handle_sigint=False)
-    await runner.run(task)
+        runner = PipelineRunner(handle_sigint=False)
+        await runner.run(task)
+    except WebSocketDisconnect:
+        LOGGER.info("media_stream_client_disconnected")
+    except Exception:
+        LOGGER.exception("media_stream_error")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 def _run_vanguard_background(user_id: str, run_id: str) -> None:
+    import threading
     suite = load_attack_suite(user_id)
     _vanguard_live[run_id] = []
     _vanguard_live_totals[run_id] = len(suite)
-    persona_agent_url = os.getenv("PERSONA_AGENT_URL", "http://backend:8000")
+    persona_agent_url = os.getenv("PERSONA_AGENT_URL", "http://localhost:8000")
     asyncio.run(run_vanguard(user_id, run_id, persona_agent_url, suite, live_results=_vanguard_live))
+    # Clean up in-memory results after 5 minutes (enough for frontend to finish polling)
+    def _cleanup() -> None:
+        time.sleep(300)
+        _vanguard_live.pop(run_id, None)
+        _vanguard_live_totals.pop(run_id, None)
+    threading.Thread(target=_cleanup, daemon=True).start()
 
 
 @app.post("/users/{user_id}/vanguard/run", response_model=QueuedResponse)
@@ -627,13 +665,12 @@ async def transcript_scores(user_id: str) -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    import time
     start = time.time()
     system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, req.user_id, req.user_id, [], req.message)
-    # Direct NVIDIA NIM call
     client = openai.AsyncOpenAI(
         api_key=os.getenv("NVIDIA_API_KEY"),
         base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        timeout=20.0,
     )
     response = await client.chat.completions.create(
         model=os.getenv("NVIDIA_BASE_MODEL", "meta/llama-4-maverick-17b-128e-instruct"),

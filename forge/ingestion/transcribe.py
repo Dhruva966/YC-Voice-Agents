@@ -10,7 +10,7 @@ from typing import Any
 def transcribe_audio(audio_path: str | Path, model_size: str | None = None) -> dict[str, Any]:
     from faster_whisper import WhisperModel
 
-    model_size = model_size or os.getenv("WHISPER_MODEL_SIZE", "large-v3")
+    model_size = model_size or os.getenv("WHISPER_MODEL_SIZE", "base")
     model = WhisperModel(model_size, device="auto", compute_type="auto")
     segments, info = model.transcribe(
         str(audio_path),

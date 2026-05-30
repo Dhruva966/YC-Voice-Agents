@@ -35,6 +35,8 @@ def _nim_client() -> OpenAI:
     return OpenAI(
         api_key=os.getenv("NVIDIA_API_KEY"),
         base_url=os.getenv("NVIDIA_BASE_URL"),
+        timeout=20.0,
+        max_retries=1,
     )
 
 
@@ -157,10 +159,15 @@ def _score_turn(turn: ScoredTurn, client: OpenAI, model: str) -> dict[str, float
                 {"role": "user", "content": prompt["user"]},
             ],
             temperature=0,
-            max_tokens=64,
+            max_tokens=150,
+            response_format={"type": "json_object"},
         )
         raw = (response.choices[0].message.content or "{}").strip()
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            LOGGER.warning("score_turn_json_error source=%s turn=%d raw=%r", turn.source_file, turn.turn_index, raw[:200])
+            return {d: 5.0 for d in _DIMENSIONS}
         return {d: float(data.get(d, 5.0)) for d in _DIMENSIONS}
     except Exception:
         LOGGER.warning("score_turn_failed source=%s turn=%d", turn.source_file, turn.turn_index)

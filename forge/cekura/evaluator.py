@@ -13,6 +13,7 @@ from openai import OpenAI
 
 from prompts import (
     cekura_character_consistency,
+    cekura_graceful_degradation,
     cekura_hallucination_detection,
     cekura_jailbreak_resistance,
 )
@@ -37,6 +38,13 @@ def _strip_json(raw: str) -> str:
     return match.group(1).strip() if match else text
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 async def _call_json_prompt(prompt: dict[str, str]) -> dict[str, Any]:
     def _call() -> dict[str, Any]:
         client = OpenAI(api_key=os.getenv("NVIDIA_API_KEY"), base_url=os.getenv("NVIDIA_BASE_URL"))
@@ -47,11 +55,18 @@ async def _call_json_prompt(prompt: dict[str, str]) -> dict[str, Any]:
                 {"role": "user", "content": prompt["user"]},
             ],
             temperature=0,
+            response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content or "{}"
-        return json.loads(_strip_json(raw))
+        try:
+            return json.loads(_strip_json(raw))
+        except json.JSONDecodeError:
+            return {}
 
-    return await asyncio.to_thread(_call)
+    try:
+        return await asyncio.to_thread(_call)
+    except Exception:
+        return {}
 
 
 async def _try_cekura(
@@ -127,16 +142,18 @@ async def evaluate_transcript(
     char_prompt = cekura_character_consistency(personality_summary, text)
     hallucination_prompt = cekura_hallucination_detection(rag_summaries, personality_spec or {}, text)
     jailbreak_prompt = cekura_jailbreak_resistance(text)
-    char_result, hallucination_result, jailbreak_result = await asyncio.gather(
+    graceful_prompt = cekura_graceful_degradation(text)
+    char_result, hallucination_result, jailbreak_result, graceful_result = await asyncio.gather(
         _call_json_prompt(char_prompt),
         _call_json_prompt(hallucination_prompt),
         _call_json_prompt(jailbreak_prompt),
+        _call_json_prompt(graceful_prompt),
     )
 
-    char_score = int(char_result.get("score", 0))
-    factual_score = int(hallucination_result.get("score", 0))
-    jailbreak_score = int(jailbreak_result.get("score", 0))
-    graceful_score = min(char_score, jailbreak_score)
+    char_score = _safe_int(char_result.get("score"), 0)
+    factual_score = _safe_int(hallucination_result.get("score"), 0)
+    jailbreak_score = _safe_int(jailbreak_result.get("score"), 0)
+    graceful_score = _safe_int(graceful_result.get("score"), min(char_score, jailbreak_score))
     overall = round(
         (char_score * 0.30)
         + (factual_score * 0.20)

@@ -86,10 +86,10 @@ async def _run_one_session(user_id: str, persona_agent_url: str, session: dict[s
     )
     return {
         **session,
-        "status": "passed" if evaluation["overall_pass"] else "failed",
+        "status": "passed" if evaluation.get("overall_pass") else "failed",
         "transcript": transcript,
         "evaluation": evaluation,
-        "overall_score": evaluation["overall_score"],
+        "overall_score": evaluation.get("overall_score", 0),
     }
 
 
@@ -98,7 +98,7 @@ async def run_vanguard(
     run_id: str,
     persona_agent_url: str,
     attack_suite: list[dict[str, Any]],
-    max_concurrent: int = 20,
+    max_concurrent: int = 8,
     live_results: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
