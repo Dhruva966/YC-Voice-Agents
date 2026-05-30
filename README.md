@@ -82,7 +82,7 @@ flowchart LR
 | Frontend | Next.js 14 + TypeScript + Tailwind |
 | Compute | AWS EC2 |
 
-> **Previously used but now dropped:** Deepgram STT and ElevenLabs TTS — replaced by Gemini 3.1 Flash Live (one audio-to-audio model handles everything for the persona pipeline).
+> **Persona pipeline:** Gemini 3.1 Flash Live replaces the old Deepgram STT + ElevenLabs TTS stack for the shipped persona agent. Some legacy voice-clone and Vanguard attacker code paths still reference Deepgram/ElevenLabs; treat those as current implementation details until migrated.
 
 ---
 
@@ -121,10 +121,10 @@ cp .env.example .env
 ### 2. Install Python dependencies
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 # Pre-download the Whisper model (1.5GB — do this on good wifi once)
-python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
+python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
 ```
 
 > **Speed tip:** Set `WHISPER_MODEL_SIZE=base` in `.env` to skip the 1.5GB download for quick demos.
@@ -194,6 +194,9 @@ ngrok http 8000
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs to NVIDIA |
 | `NVIDIA_PERSONA_MODEL` | After fine-tune completes: swap in the adapter ID |
 | `GEMINI_VOICE` | Persona voice name (default: `Puck`) |
+| `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override when running behind TLS/proxy |
+| `DEEPGRAM_API_KEY` | Legacy Vanguard attacker audio path until it is migrated to Gemini Live |
+| `ELEVENLABS_API_KEY` | Legacy Vanguard attacker audio path until it is migrated to Gemini Live |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_SECRET_ACCESS_KEY` | When `USE_LOCAL_STORAGE=false` |
@@ -226,7 +229,7 @@ curl -X POST http://localhost:8000/users/demo/ingest \
 | `POST` | `/users/{id}/build` | Trigger full build: score → personality → RAG → fine-tune |
 | `GET` | `/users/{id}/build/status` | Poll build progress |
 
-Build stages (in order): **Score Transcripts → Extract Personality → Clone Voice → Build RAG → Fine-tune**
+Build stages (in current code order): **Extract Personality → Legacy Voice Clone (if isolated audio exists) → Score Transcripts → Build RAG → Fine-tune**
 
 Returns `{"status": "none"}` before the first build runs.
 
@@ -234,7 +237,7 @@ Returns `{"status": "none"}` before the first build runs.
 curl -X POST http://localhost:8000/users/demo/build
 
 # Poll until done
-watch -n 3 'curl -s http://localhost:8000/users/demo/build/status | python -m json.tool'
+watch -n 3 'curl -s http://localhost:8000/users/demo/build/status | python3 -m json.tool'
 ```
 
 ### System Status
@@ -244,7 +247,7 @@ watch -n 3 'curl -s http://localhost:8000/users/demo/build/status | python -m js
 | `GET` | `/users/{id}/status` | System readiness check: personality, RAG, fine-tune status |
 
 ```bash
-curl http://localhost:8000/users/demo/status | python -m json.tool
+curl http://localhost:8000/users/demo/status | python3 -m json.tool
 ```
 
 ### Voice Agent
@@ -259,7 +262,7 @@ curl http://localhost:8000/users/demo/status | python -m json.tool
 
 ```bash
 # Get a Daily room URL — open in Chrome to talk to the agent without a phone
-curl -X POST http://localhost:8000/users/demo/call | python -m json.tool
+curl -X POST http://localhost:8000/users/demo/call | python3 -m json.tool
 ```
 
 ### Vanguard Adversarial Testing
@@ -292,7 +295,7 @@ curl -X POST http://localhost:8000/users/demo/vanguard/improve
 | `GET` | `/users/{id}/transcript_scores` | Per-transcript quality scores (5 dimensions) |
 
 ```bash
-curl http://localhost:8000/users/demo/dashboard | python -m json.tool
+curl http://localhost:8000/users/demo/dashboard | python3 -m json.tool
 ```
 
 ---
@@ -332,7 +335,7 @@ POST /users/{id}/build
   → _run_build() [background thread, async-safe]
     1. score_transcripts()              NVIDIA NIM rates every CALLER/AGENT turn pair
     2. extract_personality()            NVIDIA NIM → personality_spec.json
-    3. create_voice_clone()             voice_id.txt (legacy; Gemini uses GEMINI_VOICE env var)
+    3. create_voice_clone()             legacy voice_id.txt if isolated audio exists; persona uses GEMINI_VOICE
     4. build_knowledge_base()           ChromaDB collection indexed from top-K turns
     5. generate_synthetic_conversations() NVIDIA NIM → 500+ CALLER/AGENT training pairs
     6. submit_finetune()                NVIDIA Customization API → adapter_id.txt
@@ -496,7 +499,7 @@ curl http://localhost:8000/users/demo/status
 # Full smoke test
 curl -X POST http://localhost:8000/users/demo/ingest -F "file=@sample.wav"
 curl -X POST http://localhost:8000/users/demo/build
-watch -n 3 'curl -s http://localhost:8000/users/demo/build/status | python -m json.tool'
+watch -n 3 'curl -s http://localhost:8000/users/demo/build/status | python3 -m json.tool'
 
 # Test Vanguard
 curl -X POST http://localhost:8000/users/demo/vanguard/run
@@ -506,7 +509,7 @@ curl -s https://integrate.api.nvidia.com/v1/chat/completions \
   -H "Authorization: Bearer $NVIDIA_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"meta/llama-4-maverick-17b-128e-instruct","messages":[{"role":"user","content":"Say OK"}]}' \
-  | python -m json.tool
+  | python3 -m json.tool
 ```
 
 ---
@@ -531,14 +534,14 @@ Run the night before the demo:
 
 ```bash
 # 1. Pre-download Whisper model (do this on good wifi)
-python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
+python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
 
 # 2. Seed demo data (builds a synthetic persona for user_id=demo)
-python scripts/seed_demo.py
+python3 scripts/seed_demo.py
 
 # 3. Verify backend starts clean
 uvicorn api.main:app --reload
-curl http://localhost:8000/users/demo/status | python -m json.tool
+curl http://localhost:8000/users/demo/status | python3 -m json.tool
 
 # 4. Run Vanguard Cycle 0 (takes ~10 min)
 curl -X POST http://localhost:8000/users/demo/vanguard/run
@@ -572,7 +575,7 @@ cp -r local_data/ local_data_backup/
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Backend won't start | Missing env var | Check `.env`, ensure `GEMINI_API_KEY` is set |
-| `init_db()` fails at startup | ChromaDB missing | `pip install chromadb` then restart |
+| `init_db()` fails at startup | ChromaDB missing | `python3 -m pip install chromadb` then restart |
 | Gemini Live fails mid-call | Bad API key or rate limit | Verify at [aistudio.google.com](https://aistudio.google.com), check quota |
 | Twilio doesn't connect | Stale ngrok URL in Twilio console | Re-run ngrok, update webhook URL in Twilio |
 | Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong or server down | Confirm `http://localhost:8000`, confirm server is up |
@@ -586,7 +589,7 @@ cp -r local_data/ local_data_backup/
 ## Security Notes
 
 1. No API keys in code — env vars only; every key documented in `.env.example`
-2. `user_id` path parameter is untrusted — `storage.py` resolves to absolute path and asserts `local_data/` is parent (blocks path traversal)
+2. `user_id` path parameter is untrusted — storage keys must be validated so local writes cannot escape `local_data/`
 3. Twilio webhook: validate `X-Twilio-Signature` before production traffic
 4. Transcript data is PII — `local_data/` is gitignored; never commit audio or transcript content
 5. All `/users/{user_id}/*` routes must validate user context before production deployment
@@ -597,7 +600,7 @@ cp -r local_data/ local_data_backup/
 
 | Doc | Purpose |
 |-----|---------|
-| [CLAUDE.md](CLAUDE.md) | Complete reference for Claude Code agents — architecture, data contracts, patterns, security |
+| [CLAUDE.md](CLAUDE.md) | Canonical project reference for AI coding agents — architecture, data contracts, patterns, security |
 | [AGENTS.md](AGENTS.md) | Thin adapter for Codex + other non-Claude AI agents — agent stubs, workflow mapping |
 | [HANDOFF.md](HANDOFF.md) | Subsystem data contracts and interface specs (read before touching interface boundaries) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Setup, AWS, Twilio config, demo runbook |

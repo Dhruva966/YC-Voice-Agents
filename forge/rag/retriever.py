@@ -10,8 +10,12 @@ from typing import Iterable
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI
 
-_USE_LOCAL = os.getenv("USE_LOCAL_RAG", "true").lower() == "true"
-_LOCAL_CHROMA_DIR = os.getenv("LOCAL_CHROMA_DIR", "./local_data/chroma")
+def _use_local() -> bool:
+    return os.getenv("USE_LOCAL_RAG", "true").lower() == "true"
+
+
+def _local_chroma_dir() -> str:
+    return os.getenv("LOCAL_CHROMA_DIR", "./local_data/chroma")
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -52,8 +56,9 @@ def _get_chroma():
     with _chroma_lock:
         if _chroma_client is None:
             import chromadb
-            os.makedirs(_LOCAL_CHROMA_DIR, exist_ok=True)
-            _chroma_client = chromadb.PersistentClient(path=_LOCAL_CHROMA_DIR)
+            chroma_dir = _local_chroma_dir()
+            os.makedirs(chroma_dir, exist_ok=True)
+            _chroma_client = chromadb.PersistentClient(path=chroma_dir)
     return _chroma_client
 
 
@@ -138,6 +143,10 @@ def _get_conn():
     register_vector(conn)
     try:
         yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         pool.putconn(conn)
 
@@ -219,19 +228,19 @@ def _pgvector_retrieve(user_id: str, query: str, top_k: int = 5) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def init_db() -> None:
-    if _USE_LOCAL:
+    if _use_local():
         _chroma_init_db()
     else:
         _pgvector_init_db()
 
 
 def build_knowledge_base(user_id: str, texts: list[str], source_label: str) -> int:
-    if _USE_LOCAL:
+    if _use_local():
         return _chroma_build(user_id, texts, source_label)
     return _pgvector_build(user_id, texts, source_label)
 
 
 def retrieve(user_id: str, query: str, top_k: int = 5) -> list[str]:
-    if _USE_LOCAL:
+    if _use_local():
         return _chroma_retrieve(user_id, query, top_k)
     return _pgvector_retrieve(user_id, query, top_k)

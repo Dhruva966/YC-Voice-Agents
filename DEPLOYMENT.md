@@ -9,7 +9,7 @@ cp .env.example .env
 #       DAILY_API_KEY, TWILIO_*, CEKURA_API_KEY + CEKURA_BASE_URL
 # Leave USE_LOCAL_STORAGE=true, USE_LOCAL_RAG=true
 
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 # Backend
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
@@ -18,7 +18,8 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 cd frontend && npm install && npm run dev
 # → http://localhost:3000
 
-# Expose for Twilio webhook
+# Expose for Twilio webhook. Twilio Media Streams require a wss URL, so use
+# an HTTPS tunnel or TLS-terminating proxy.
 ngrok http 8000
 # → Set Twilio webhook: https://<ngrok-url>/webhook/twilio/inbound
 ```
@@ -119,18 +120,18 @@ For serving from EC2 instead of local:
 # SSH in, then:
 sudo apt-get update && sudo apt-get install -y python3.11 python3-pip nodejs npm
 git clone <repo> && cd forge
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 cp .env.example .env && nano .env  # fill keys
 
 # Run with nohup
 nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 &
 
-# Security group: open port 8000 inbound
-# Set PERSONA_AGENT_URL=http://<ec2-public-ip>:8000
-# Update Twilio webhook to http://<ec2-public-ip>:8000/webhook/twilio/inbound
+# Security group: open 443 inbound for TLS-terminated traffic.
+# Set PERSONA_AGENT_URL=https://<public-host>
+# Update Twilio webhook to https://<public-host>/webhook/twilio/inbound
 ```
 
-Note: For production, terminate SSL at a load balancer or use Caddy. For demo, HTTP is fine.
+Note: Twilio `<Stream>` establishes a `wss` WebSocket connection, and Twilio documents `wss` as the only supported protocol. For EC2 demos, put Caddy, nginx, an ALB, or ngrok in front of uvicorn instead of pointing Twilio at plain HTTP.
 
 ---
 
@@ -154,16 +155,16 @@ Run this sequence Thursday/Friday before the hackathon:
 
 ```bash
 # 1. Pre-download Whisper model (1.5GB, do this on good wifi)
-python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
+python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
 
 # 2. Seed demo data
-python scripts/seed_demo.py
+python3 scripts/seed_demo.py
 
 # 3. Verify backend starts clean
 uvicorn api.main:app --reload
 
 # 4. Check system status
-curl http://localhost:8000/users/demo/status | python -m json.tool
+curl http://localhost:8000/users/demo/status | python3 -m json.tool
 
 # 5. Run Vanguard baseline (Cycle 0 — takes ~10min)
 curl -X POST http://localhost:8000/users/demo/vanguard/run
@@ -198,8 +199,8 @@ cp -r local_data/ local_data_backup/
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Backend won't start | Missing env var | Check `.env`, run `python -m dotenv run python -c "import os; print(os.getenv('GEMINI_API_KEY'))"` |
-| `init_db()` fails at startup | ChromaDB missing | `pip install chromadb` then restart |
+| Backend won't start | Missing env var | Check `.env`, run `python3 -m dotenv run python3 -c "import os; print(os.getenv('GEMINI_API_KEY'))"` |
+| `init_db()` fails at startup | ChromaDB missing | `python3 -m pip install chromadb` then restart |
 | Gemini Live fails | `GEMINI_API_KEY` wrong or rate-limited | Verify key at aistudio.google.com, check quota |
 | Twilio doesn't connect | ngrok URL not in Twilio console | Re-run ngrok, update webhook URL |
 | Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong | Confirm `http://localhost:8000`, confirm server is up |

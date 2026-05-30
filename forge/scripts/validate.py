@@ -1,9 +1,9 @@
 """Pre-hackathon validation script for Forge.
 
 Run from the forge/ directory:
-    python scripts/validate.py
+    python3 scripts/validate.py
 
-Checks all 11 critical dependencies and prints PASS/FAIL for each.
+Checks critical dependencies and prints PASS/FAIL/SKIP for each.
 Continues even if earlier checks fail.
 """
 
@@ -54,6 +54,7 @@ def _post(url: str, headers: dict | None = None, json_body: dict | None = None, 
 
 
 passed = 0
+skipped = 0
 total = 12
 
 
@@ -66,30 +67,38 @@ def check(n: int, label: str, ok: bool, detail: str = "") -> None:
         passed += 1
 
 
+def skip(n: int, label: str, detail: str = "") -> None:
+    global skipped
+    suffix = f"  ({detail})" if detail else ""
+    print(f"[SKIP] Check {n:02d}: {label}{suffix}")
+    skipped += 1
+
+
 # ---------------------------------------------------------------------------
 # Check 1: Required env vars
 # ---------------------------------------------------------------------------
 REQUIRED_ENV_VARS = [
+    "GEMINI_API_KEY",
     "NVIDIA_API_KEY",
     "NVIDIA_BASE_URL",
     "NVIDIA_BASE_MODEL",
     "NVIDIA_EMBEDDING_MODEL",
     "DAILY_API_KEY",
-    "DEEPGRAM_API_KEY",
-    "ELEVENLABS_API_KEY",
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
     "TWILIO_PHONE_NUMBER",
 ]
 
-# CEKURA_API_KEY / CEKURA_BASE_URL are optional — evaluator falls back to LLM
+# CEKURA_API_KEY / CEKURA_BASE_URL are optional — evaluator falls back to LLM.
+# DEEPGRAM_API_KEY / ELEVENLABS_API_KEY are legacy attacker-bot dependencies
+# until Vanguard is migrated to Gemini Live.
 
 try:
     missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
     if missing:
         check(1, "Required env vars", False, f"missing: {', '.join(missing)}")
     else:
-        check(1, "Required env vars", True, "all 10 present")
+        check(1, "Required env vars", True, f"all {len(REQUIRED_ENV_VARS)} present")
 except Exception as exc:
     check(1, "Required env vars", False, str(exc))
 
@@ -155,35 +164,41 @@ except Exception as exc:
 
 
 # ---------------------------------------------------------------------------
-# Check 4: Deepgram API key is valid
+# Check 4: Deepgram API key is valid when legacy attacker audio is enabled
 # ---------------------------------------------------------------------------
 try:
     deepgram_key = os.getenv("DEEPGRAM_API_KEY", "")
-    status, body = _get(
-        "https://api.deepgram.com/v1/projects",
-        headers={"Authorization": f"Token {deepgram_key}"},
-    )
-    if status == 200:
-        check(4, "Deepgram API key", True)
+    if not deepgram_key:
+        skip(4, "Deepgram API key", "only needed by legacy Vanguard attacker audio path")
     else:
-        check(4, "Deepgram API key", False, f"HTTP {status}: {body[:200]}")
+        status, body = _get(
+            "https://api.deepgram.com/v1/projects",
+            headers={"Authorization": f"Token {deepgram_key}"},
+        )
+        if status == 200:
+            check(4, "Deepgram API key", True)
+        else:
+            check(4, "Deepgram API key", False, f"HTTP {status}: {body[:200]}")
 except Exception as exc:
     check(4, "Deepgram API key", False, str(exc))
 
 
 # ---------------------------------------------------------------------------
-# Check 5: ElevenLabs API key is valid
+# Check 5: ElevenLabs API key is valid when legacy attacker audio is enabled
 # ---------------------------------------------------------------------------
 try:
     el_key = os.getenv("ELEVENLABS_API_KEY", "")
-    status, body = _get(
-        "https://api.elevenlabs.io/v1/user",
-        headers={"xi-api-key": el_key},
-    )
-    if status == 200:
-        check(5, "ElevenLabs API key", True)
+    if not el_key:
+        skip(5, "ElevenLabs API key", "only needed by legacy Vanguard attacker audio path")
     else:
-        check(5, "ElevenLabs API key", False, f"HTTP {status}: {body[:200]}")
+        status, body = _get(
+            "https://api.elevenlabs.io/v1/user",
+            headers={"xi-api-key": el_key},
+        )
+        if status == 200:
+            check(5, "ElevenLabs API key", True)
+        else:
+            check(5, "ElevenLabs API key", False, f"HTTP {status}: {body[:200]}")
 except Exception as exc:
     check(5, "ElevenLabs API key", False, str(exc))
 
@@ -227,7 +242,7 @@ try:
         from rag.retriever import build_knowledge_base as _bkb  # type: ignore
     sample_text = (
         "Forge is a voice AI system that validates persona agents before production. "
-        "It uses NVIDIA NIM for LLM calls and ElevenLabs for TTS synthesis."
+        "It uses NVIDIA NIM for scoring and Gemini Live for the persona voice pipeline."
     )
     inserted = _bkb("demo", [sample_text], "validate_script")
     check(8, "RAG build_knowledge_base()", True, f"inserted/upserted {inserted} chunk(s)")
@@ -304,7 +319,7 @@ try:
         if has_fake:
             print("FAIL")
             print(f"    ✗ Fake seeded data found in local_data/demo/improvement_cycles/")
-            print(f"    → Run: Remove local_data/demo/improvement_cycles/ then run python scripts/seed_demo.py")
+            print(f"    → Run: Remove local_data/demo/improvement_cycles/ then run python3 scripts/seed_demo.py")
         else:
             print("PASS")
             passed += 1
@@ -320,4 +335,4 @@ except Exception as e:
 # Summary
 # ---------------------------------------------------------------------------
 print()
-print(f"{passed}/{total} checks passed.")
+print(f"{passed}/{total} checks passed, {skipped} skipped.")

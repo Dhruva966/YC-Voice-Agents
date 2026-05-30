@@ -1,3 +1,5 @@
+PYTHON ?= python3
+
 dev:
 	docker compose up
 
@@ -8,10 +10,10 @@ vanguard:
 	curl -X POST http://localhost:8000/users/demo/vanguard/run
 
 migrate:
-	python -c "from rag.retriever import init_db; init_db()"
+	$(PYTHON) -c "from rag.retriever import init_db; init_db()"
 
 seed:
-	python scripts/seed_demo.py
+	$(PYTHON) scripts/seed_demo.py
 
 validate:
-	python scripts/validate.py
+	$(PYTHON) scripts/validate.py

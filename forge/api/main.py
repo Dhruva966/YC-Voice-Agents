@@ -24,6 +24,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from twilio.twiml.voice_response import VoiceResponse
 
+load_dotenv()
+
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -62,8 +64,6 @@ from prompts import persona_system
 from rag.retriever import build_knowledge_base, init_db
 from vanguard.orchestrator import load_attack_suite, run_vanguard
 from voice.clone import create_voice_clone
-
-load_dotenv()
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_NVIDIA_BASE_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
@@ -113,6 +113,15 @@ class JoinRoomRequest(BaseModel):
 
 def _base_model() -> str:
     return os.getenv("NVIDIA_BASE_MODEL") or DEFAULT_NVIDIA_BASE_MODEL
+
+
+def _twilio_stream_url(request: Request) -> str:
+    configured = os.getenv("TWILIO_STREAM_URL") or os.getenv("WSS_BASE_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"wss://{host}/media-stream"
 
 
 def _put_status(user_id: str, job_id: str, payload: dict[str, Any]) -> None:
@@ -214,13 +223,16 @@ def _run_build(user_id: str, job_id: str) -> None:
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "scoring_transcripts", "status": "running"})
         scored = score_transcripts(user_id, transcripts)
-        training_transcripts = (
-            [{"turns": [{"role": "user" if "caller" in t else "assistant",
-                         "text": t.get("caller", "") or t.get("agent", "")}
-                        for t in [{"caller": st.caller}, {"agent": st.agent}]]}
-             for st in scored.top_k_turns]
-            if scored.top_k_turns else transcripts
-        )
+        if scored.top_k_turns:
+            training_transcripts = [
+                {"turns": [
+                    {"role": "user", "text": st.caller},
+                    {"role": "assistant", "text": st.agent},
+                ]}
+                for st in scored.top_k_turns
+            ]
+        else:
+            training_transcripts = transcripts
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "building_rag", "status": "running"})
         kb_texts = get_user_knowledge_base_texts(user_id) + corpus_texts
@@ -290,11 +302,9 @@ async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallRes
 
 @app.post("/webhook/twilio/inbound")
 async def twilio_inbound(request: Request) -> Response:
-    scheme = "wss" if request.url.scheme == "https" else "ws"
-    stream_url = f"{scheme}://{request.url.hostname}/media-stream"
     twiml = VoiceResponse()
     connect = twiml.connect()
-    connect.stream(url=stream_url)
+    connect.stream(url=_twilio_stream_url(request))
     return Response(content=str(twiml), media_type="application/xml")
 
 
