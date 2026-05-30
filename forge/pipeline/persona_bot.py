@@ -112,7 +112,7 @@ def run_persona_bot(
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
         from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-        from pipecat.services.google.gemini_live import GeminiLiveLLMService
+        from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
         from pipecat.services.settings import LLMSettings
         from pipecat.transports.daily.transport import DailyParams, DailyTransport
     except ImportError as exc:
@@ -136,9 +136,11 @@ def run_persona_bot(
 
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GEMINI_API_KEY"),
-        model="gemini-3.1-flash-live",
-        voice=gemini_voice,
-        system_instruction=initial_system_prompt,
+        settings=GeminiLiveLLMService.Settings(
+            model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+            voice=gemini_voice,
+            system_instruction=initial_system_prompt,
+        ),
     )
 
     context = LLMContext()

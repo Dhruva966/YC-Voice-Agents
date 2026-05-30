@@ -1,6 +1,6 @@
 # forge/pipeline — CLAUDE.md
 
-**Purpose:** Pipecat pipelines for both the persona agent (voice calls) and the attacker agent (Vanguard sessions). The persona pipeline now uses Gemini 3.1 Flash Live — one audio-to-audio model replaces the old Deepgram STT + NVIDIA NIM LLM + ElevenLabs TTS triple stack.
+**Purpose:** Pipecat pipelines for both the persona agent (voice calls) and the attacker agent (Vanguard sessions). Both runtime voice paths use Gemini 3.1 Flash Live — one audio-to-audio model replaces the old Deepgram STT + NVIDIA NIM LLM + ElevenLabs TTS triple stack.
 
 → Root: [CLAUDE.md](../../CLAUDE.md)
 
@@ -18,13 +18,15 @@
 
 ✅ **Gemini 3.1 Flash Live as the single voice service (STT + LLM + TTS):**
 ```python
-from pipecat.services.google.gemini_live import GeminiLiveLLMService
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 
 llm = GeminiLiveLLMService(
     api_key=os.getenv("GEMINI_API_KEY"),
-    model="gemini-3.1-flash-live",
-    system_instruction=initial_system_prompt,
-    voice="Puck",  # or configurable via env
+    settings=GeminiLiveLLMService.Settings(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+        system_instruction=initial_system_prompt,
+        voice=os.getenv("GEMINI_VOICE", "Puck"),
+    ),
 )
 ```
 
@@ -80,7 +82,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 
 # RIGHT — Gemini Live handles both
-from pipecat.services.google.gemini_live import GeminiLiveLLMService
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 ```
 
 ❌ **Don't use OpenAILLMService with NVIDIA NIM for live calls:**
@@ -90,7 +92,10 @@ from pipecat.services.openai.llm import OpenAILLMService
 llm = OpenAILLMService(api_key=NVIDIA_API_KEY, base_url=NVIDIA_BASE_URL)
 
 # RIGHT for live calls
-llm = GeminiLiveLLMService(api_key=GEMINI_API_KEY, model="gemini-3.1-flash-live")
+llm = GeminiLiveLLMService(
+    api_key=GEMINI_API_KEY,
+    settings=GeminiLiveLLMService.Settings(model="gemini-3.1-flash-live-preview"),
+)
 ```
 
 ❌ **Don't block the pipeline with sync I/O — use asyncio.to_thread():**
@@ -122,4 +127,4 @@ system = persona_system(user_id, spec, chunks)
 
 4. **Don't change the pipeline frame ordering.** `context.user()` must come before the updater, and `context.assistant()` must be last. The LLMContext accumulates history — wrong order corrupts conversation state.
 
-5. **Don't hardcode the Gemini voice.** Make it configurable via env var (`GEMINI_VOICE`, default `"Puck"`) so the sales persona voice can be swapped without a deploy.
+5. **Don't hardcode Gemini model or voices.** Use `GEMINI_MODEL`, `GEMINI_VOICE`, and `ATTACKER_GEMINI_VOICE` so demo behavior can be adjusted without a deploy.

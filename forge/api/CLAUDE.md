@@ -43,12 +43,15 @@ def _put_status(user_id: str, job_id: str, payload: dict) -> None:
 
 ✅ **Gemini Live pipeline in `/media-stream` — audio-to-audio, no separate STT/TTS:**
 ```python
-from pipecat.services.google.gemini_live import GeminiLiveLLMService
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 
 llm = GeminiLiveLLMService(
     api_key=os.getenv("GEMINI_API_KEY"),
-    model="gemini-3.1-flash-live",
-    system_instruction=initial_system_prompt,
+    settings=GeminiLiveLLMService.Settings(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+        system_instruction=initial_system_prompt,
+        voice=os.getenv("GEMINI_VOICE", "Puck"),
+    ),
 )
 ```
 

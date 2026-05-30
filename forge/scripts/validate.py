@@ -2,6 +2,7 @@
 
 Run from the forge/ directory:
     python3 scripts/validate.py
+    python3 scripts/validate.py --vanguard
 
 Checks critical dependencies and prints PASS/FAIL/SKIP for each.
 Continues even if earlier checks fail.
@@ -9,6 +10,7 @@ Continues even if earlier checks fail.
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 
@@ -58,6 +60,15 @@ skipped = 0
 total = 12
 
 
+parser = argparse.ArgumentParser(description="Validate Forge demo dependencies.")
+parser.add_argument(
+    "--vanguard",
+    action="store_true",
+    help="Include Vanguard-specific Gemini attacker readiness details.",
+)
+args = parser.parse_args()
+
+
 def check(n: int, label: str, ok: bool, detail: str = "") -> None:
     global passed
     status = "PASS" if ok else "FAIL"
@@ -90,8 +101,6 @@ REQUIRED_ENV_VARS = [
 ]
 
 # CEKURA_API_KEY / CEKURA_BASE_URL are optional — evaluator falls back to LLM.
-# DEEPGRAM_API_KEY / ELEVENLABS_API_KEY are legacy attacker-bot dependencies
-# until Vanguard is migrated to Gemini Live.
 
 try:
     missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
@@ -164,43 +173,34 @@ except Exception as exc:
 
 
 # ---------------------------------------------------------------------------
-# Check 4: Deepgram API key is valid when legacy attacker audio is enabled
+# Check 4: Gemini Live model configuration is current
 # ---------------------------------------------------------------------------
 try:
-    deepgram_key = os.getenv("DEEPGRAM_API_KEY", "")
-    if not deepgram_key:
-        skip(4, "Deepgram API key", "only needed by legacy Vanguard attacker audio path")
-    else:
-        status, body = _get(
-            "https://api.deepgram.com/v1/projects",
-            headers={"Authorization": f"Token {deepgram_key}"},
-        )
-        if status == 200:
-            check(4, "Deepgram API key", True)
-        else:
-            check(4, "Deepgram API key", False, f"HTTP {status}: {body[:200]}")
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+    ok = "live" in gemini_model.lower() and "flash" in gemini_model.lower()
+    detail = f"model: {gemini_model}"
+    if gemini_model == "gemini-3.1-flash-live":
+        detail += "; expected preview model code is gemini-3.1-flash-live-preview"
+        ok = False
+    check(4, "Gemini Live model config", ok, detail)
 except Exception as exc:
-    check(4, "Deepgram API key", False, str(exc))
+    check(4, "Gemini Live model config", False, str(exc))
 
 
 # ---------------------------------------------------------------------------
-# Check 5: ElevenLabs API key is valid when legacy attacker audio is enabled
+# Check 5: Gemini voice configuration exists for persona and attacker
 # ---------------------------------------------------------------------------
 try:
-    el_key = os.getenv("ELEVENLABS_API_KEY", "")
-    if not el_key:
-        skip(5, "ElevenLabs API key", "only needed by legacy Vanguard attacker audio path")
-    else:
-        status, body = _get(
-            "https://api.elevenlabs.io/v1/user",
-            headers={"xi-api-key": el_key},
-        )
-        if status == 200:
-            check(5, "ElevenLabs API key", True)
-        else:
-            check(5, "ElevenLabs API key", False, f"HTTP {status}: {body[:200]}")
+    persona_voice = os.getenv("GEMINI_VOICE", "Puck")
+    attacker_voice = os.getenv("ATTACKER_GEMINI_VOICE", "Charon")
+    detail = f"persona={persona_voice}, attacker={attacker_voice}"
+    if args.vanguard:
+        detail += f", persona_agent_url={os.getenv('PERSONA_AGENT_URL', 'http://localhost:8000')}"
+    if persona_voice == attacker_voice:
+        detail += "; consider distinct voices for demo clarity"
+    check(5, "Gemini voice config", bool(persona_voice and attacker_voice), detail)
 except Exception as exc:
-    check(5, "ElevenLabs API key", False, str(exc))
+    check(5, "Gemini voice config", False, str(exc))
 
 
 # ---------------------------------------------------------------------------

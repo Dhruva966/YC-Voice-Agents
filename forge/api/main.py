@@ -31,7 +31,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.google.gemini_live import GeminiLiveLLMService
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -333,9 +333,11 @@ async def media_stream(websocket: WebSocket):
 
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GEMINI_API_KEY"),
-        model="gemini-3.1-flash-live",
-        voice=os.getenv("GEMINI_VOICE", "Puck"),
-        system_instruction=initial_system_prompt,
+        settings=GeminiLiveLLMService.Settings(
+            model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+            voice=os.getenv("GEMINI_VOICE", "Puck"),
+            system_instruction=initial_system_prompt,
+        ),
     )
 
     context = DynamicPersonaContext(initial_system_prompt)

@@ -1035,7 +1035,7 @@ export default function Page() {
                                       borderRadius: 6, padding: 12, maxHeight: 300, overflowY: "auto",
                                     }}>
                                       {session.transcript.turns.map((turn, i) => {
-                                        const isAttacker = turn.role === "user" || turn.role.toLowerCase() === "attacker";
+                                        const isAttacker = turn.role === "caller" || turn.role === "user" || turn.role.toLowerCase() === "attacker";
                                         return (
                                           <div key={i} style={{
                                             display: "flex", flexDirection: "column",

@@ -48,7 +48,10 @@ ngrok http 8000
 |----------|---------|--------|
 | `USE_LOCAL_STORAGE` | `true` | `./local_data/` instead of S3 |
 | `USE_LOCAL_RAG` | `true` | ChromaDB instead of pgvector |
-| `WHISPER_MODEL_SIZE` | `large-v3` | Set to `base` if 1.5GB download is too slow |
+| `GEMINI_MODEL` | `gemini-3.1-flash-live-preview` | Gemini Live model code |
+| `GEMINI_VOICE` | `Puck` | Persona voice name |
+| `ATTACKER_GEMINI_VOICE` | `Charon` | Vanguard attacker voice name |
+| `WHISPER_MODEL_SIZE` | `base` | Set to `large-v3` for best transcription quality |
 | `TRANSCRIPT_SCORE_TOP_K` | `50` | Segments selected per scoring dimension |
 | `PERSONA_AGENT_URL` | `http://localhost:8000` | Where Vanguard finds the persona API |
 
@@ -57,11 +60,17 @@ ngrok http 8000
 |----------|-------------|
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs |
 | `NVIDIA_PERSONA_MODEL` | After fine-tune: adapter ID to swap in |
-| `GEMINI_VOICE` | Gemini Live voice name (default: `Puck`) |
+| `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override behind TLS/proxy |
+| `ELEVENLABS_API_KEY` | Legacy voice clone helper only; not needed for current runtime |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_SECRET_ACCESS_KEY` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_REGION` | When `USE_LOCAL_STORAGE=false` |
+| `AWS_RDS_HOST` | pgvector/RDS host when `USE_LOCAL_RAG=false` |
+| `AWS_RDS_PORT` | pgvector/RDS port when `USE_LOCAL_RAG=false`; default `5432` |
+| `AWS_RDS_DB` | pgvector/RDS database name; also used by docker-compose Postgres |
+| `AWS_RDS_USER` | pgvector/RDS database user; also used by docker-compose Postgres |
+| `AWS_RDS_PASSWORD` | pgvector/RDS database password; also used by docker-compose Postgres |
 | `HUGGINGFACE_TOKEN` | Better speaker diarization via pyannote |
 
 ---
@@ -146,6 +155,8 @@ docker-compose up --build
 ```
 
 When using docker-compose: set `PERSONA_AGENT_URL=http://backend:8000` in `.env`.
+The checked-in `.env.example` includes local pgvector defaults so Compose has
+Postgres credentials before you add production RDS settings.
 
 ---
 
@@ -154,8 +165,8 @@ When using docker-compose: set `PERSONA_AGENT_URL=http://backend:8000` in `.env`
 Run this sequence Thursday/Friday before the hackathon:
 
 ```bash
-# 1. Pre-download Whisper model (1.5GB, do this on good wifi)
-python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
+# 1. Pre-download the Whisper model selected by .env
+python3 -c "import os; from dotenv import load_dotenv; from faster_whisper import WhisperModel; load_dotenv(); WhisperModel(os.getenv('WHISPER_MODEL_SIZE', 'base'))"
 
 # 2. Seed demo data
 python3 scripts/seed_demo.py
@@ -166,7 +177,8 @@ uvicorn api.main:app --reload
 # 4. Check system status
 curl http://localhost:8000/users/demo/status | python3 -m json.tool
 
-# 5. Run Vanguard baseline (Cycle 0 — takes ~10min)
+# 5. Verify Vanguard dependencies, then run baseline (Cycle 0 — takes ~10min)
+python3 scripts/validate.py --vanguard
 curl -X POST http://localhost:8000/users/demo/vanguard/run
 # Save run_id, verify ~40-55% pass rate
 
@@ -203,7 +215,7 @@ cp -r local_data/ local_data_backup/
 | `init_db()` fails at startup | ChromaDB missing | `python3 -m pip install chromadb` then restart |
 | Gemini Live fails | `GEMINI_API_KEY` wrong or rate-limited | Verify key at aistudio.google.com, check quota |
 | Twilio doesn't connect | ngrok URL not in Twilio console | Re-run ngrok, update webhook URL |
-| Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong | Confirm `http://localhost:8000`, confirm server is up |
+| Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong, server down, or Gemini/Daily key issue | Confirm `http://localhost:8000`, server health, `GEMINI_API_KEY`, and `DAILY_API_KEY` |
 | Cekura scores all 0 | Cekura unreachable | Expected — `"provider": "llm_fallback"` still works |
 | Build hangs at fine-tune | `NVIDIA_CUSTOMIZATION_BASE_URL` not set | Fine-tune logs error, falls back to base model — build still completes |
 | Transcript scorer times out | NVIDIA NIM rate limit | Reduce batch size or add retry in `transcript_scorer.py` |

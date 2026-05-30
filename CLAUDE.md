@@ -20,7 +20,7 @@ The pitch: every other team built a voice agent. Forge builds the infrastructure
 | Compute | AWS EC2 |
 | Backend | FastAPI (Python 3.11+) |
 | Frontend | Next.js 14 (TypeScript, Tailwind) |
-| Audio transcription | faster-whisper (local, large-v3) |
+| Audio transcription | faster-whisper (local, `base` default; `large-v3` optional) |
 
 **Dropped from old stack:** Deepgram STT, ElevenLabs TTS — both replaced by Gemini 3.1 Flash Live (audio-to-audio, one model handles everything).
 

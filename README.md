@@ -77,12 +77,12 @@ flowchart LR
 | Evaluation | Cekura (LLM fallback: NVIDIA NIM) |
 | Vector DB | ChromaDB (local) / pgvector (prod) |
 | Storage | `storage.py` shim — `./local_data/` (local) or AWS S3 (prod) |
-| Audio transcription | faster-whisper (local, large-v3) |
+| Audio transcription | faster-whisper (local, `base` default; `large-v3` optional) |
 | Backend | FastAPI + Python 3.11 |
 | Frontend | Next.js 14 + TypeScript + Tailwind |
 | Compute | AWS EC2 |
 
-> **Persona pipeline:** Gemini 3.1 Flash Live replaces the old Deepgram STT + ElevenLabs TTS stack for the shipped persona agent. Some legacy voice-clone and Vanguard attacker code paths still reference Deepgram/ElevenLabs; treat those as current implementation details until migrated.
+> **Voice pipeline:** Gemini 3.1 Flash Live replaces the old Deepgram STT + ElevenLabs TTS stack for both the shipped persona agent and Vanguard attacker. The remaining ElevenLabs helper is legacy voice-clone code kept for reference.
 
 ---
 
@@ -123,11 +123,11 @@ cp .env.example .env
 ```bash
 python3 -m pip install -r requirements.txt
 
-# Pre-download the Whisper model (1.5GB — do this on good wifi once)
-python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
+# Pre-download the Whisper model selected by .env (base by default)
+python3 -c "import os; from dotenv import load_dotenv; from faster_whisper import WhisperModel; load_dotenv(); WhisperModel(os.getenv('WHISPER_MODEL_SIZE', 'base'))"
 ```
 
-> **Speed tip:** Set `WHISPER_MODEL_SIZE=base` in `.env` to skip the 1.5GB download for quick demos.
+> **Quality tip:** Set `WHISPER_MODEL_SIZE=large-v3` in `.env` for better transcription if the 1.5GB download is acceptable.
 
 ### 3. Start the backend
 
@@ -183,7 +183,10 @@ ngrok http 8000
 |----------|---------|--------|
 | `USE_LOCAL_STORAGE` | `true` | Uses `./local_data/` instead of AWS S3 |
 | `USE_LOCAL_RAG` | `true` | Uses ChromaDB instead of pgvector on RDS |
-| `WHISPER_MODEL_SIZE` | `large-v3` | Set `base` to skip the 1.5GB download |
+| `GEMINI_MODEL` | `gemini-3.1-flash-live-preview` | Gemini Live model code |
+| `GEMINI_VOICE` | `Puck` | Persona voice name |
+| `ATTACKER_GEMINI_VOICE` | `Charon` | Vanguard attacker voice name |
+| `WHISPER_MODEL_SIZE` | `base` | Set `large-v3` for best transcription quality |
 | `TRANSCRIPT_SCORE_TOP_K` | `50` | How many top segments to select per build |
 | `PERSONA_AGENT_URL` | `http://localhost:8000` | Where Vanguard finds the persona API |
 
@@ -193,14 +196,17 @@ ngrok http 8000
 |----------|-------------|
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs to NVIDIA |
 | `NVIDIA_PERSONA_MODEL` | After fine-tune completes: swap in the adapter ID |
-| `GEMINI_VOICE` | Persona voice name (default: `Puck`) |
 | `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override when running behind TLS/proxy |
-| `DEEPGRAM_API_KEY` | Legacy Vanguard attacker audio path until it is migrated to Gemini Live |
-| `ELEVENLABS_API_KEY` | Legacy Vanguard attacker audio path until it is migrated to Gemini Live |
+| `ELEVENLABS_API_KEY` | Legacy voice clone helper only; not needed for current runtime |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_SECRET_ACCESS_KEY` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_REGION` | When `USE_LOCAL_STORAGE=false` |
+| `AWS_RDS_HOST` | pgvector/RDS host when `USE_LOCAL_RAG=false` |
+| `AWS_RDS_PORT` | pgvector/RDS port when `USE_LOCAL_RAG=false`; default `5432` |
+| `AWS_RDS_DB` | pgvector/RDS database name; also used by docker-compose Postgres |
+| `AWS_RDS_USER` | pgvector/RDS database user; also used by docker-compose Postgres |
+| `AWS_RDS_PASSWORD` | pgvector/RDS database password; also used by docker-compose Postgres |
 | `HUGGINGFACE_TOKEN` | Better speaker diarization via pyannote (fallback works without it) |
 
 ---
@@ -501,7 +507,8 @@ curl -X POST http://localhost:8000/users/demo/ingest -F "file=@sample.wav"
 curl -X POST http://localhost:8000/users/demo/build
 watch -n 3 'curl -s http://localhost:8000/users/demo/build/status | python3 -m json.tool'
 
-# Test Vanguard
+# Test Vanguard Gemini attacker readiness
+python3 scripts/validate.py --vanguard
 curl -X POST http://localhost:8000/users/demo/vanguard/run
 
 # Test NVIDIA NIM directly
@@ -525,6 +532,8 @@ docker-compose up --build
 ```
 
 When using docker-compose, set `PERSONA_AGENT_URL=http://backend:8000` in `.env`.
+The checked-in `.env.example` includes local pgvector defaults so `docker-compose up`
+has Postgres credentials even before you add production RDS settings.
 
 ---
 
@@ -533,8 +542,8 @@ When using docker-compose, set `PERSONA_AGENT_URL=http://backend:8000` in `.env`
 Run the night before the demo:
 
 ```bash
-# 1. Pre-download Whisper model (do this on good wifi)
-python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3')"
+# 1. Pre-download the Whisper model selected by .env
+python3 -c "import os; from dotenv import load_dotenv; from faster_whisper import WhisperModel; load_dotenv(); WhisperModel(os.getenv('WHISPER_MODEL_SIZE', 'base'))"
 
 # 2. Seed demo data (builds a synthetic persona for user_id=demo)
 python3 scripts/seed_demo.py
@@ -543,7 +552,8 @@ python3 scripts/seed_demo.py
 uvicorn api.main:app --reload
 curl http://localhost:8000/users/demo/status | python3 -m json.tool
 
-# 4. Run Vanguard Cycle 0 (takes ~10 min)
+# 4. Verify Vanguard dependencies, then run Cycle 0 (takes ~10 min)
+python3 scripts/validate.py --vanguard
 curl -X POST http://localhost:8000/users/demo/vanguard/run
 # Expected: 47–55% pass rate
 
@@ -578,7 +588,7 @@ cp -r local_data/ local_data_backup/
 | `init_db()` fails at startup | ChromaDB missing | `python3 -m pip install chromadb` then restart |
 | Gemini Live fails mid-call | Bad API key or rate limit | Verify at [aistudio.google.com](https://aistudio.google.com), check quota |
 | Twilio doesn't connect | Stale ngrok URL in Twilio console | Re-run ngrok, update webhook URL in Twilio |
-| Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong or server down | Confirm `http://localhost:8000`, confirm server is up |
+| Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong, server down, or Gemini/Daily key issue | Confirm `http://localhost:8000`, server health, `GEMINI_API_KEY`, and `DAILY_API_KEY` |
 | Cekura scores all 0 | Cekura unreachable | Expected — `"provider": "llm_fallback"` still works, scores populate |
 | Build hangs at fine-tune | `NVIDIA_CUSTOMIZATION_BASE_URL` not set | Fine-tune logs error and falls back to base model — build still completes |
 | Transcript scorer times out | NVIDIA NIM rate limit | Reduce `TRANSCRIPT_SCORE_TOP_K` (e.g., `20`) or add retry |
