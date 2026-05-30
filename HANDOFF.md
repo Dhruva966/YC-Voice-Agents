@@ -1,0 +1,228 @@
+# Forge — HANDOFF.md
+
+Contracts between subsystems. Read this when touching an interface boundary.
+
+## Subsystem Map
+
+```
+[Browser / Twilio caller]
+        │
+        ▼
+[api/main.py] ─── background thread ──► [pipeline/persona_bot.py]
+        │                                         │
+        │                               [Gemini 3.1 Flash Live]
+        │                               [rag/retriever.py]
+        │
+        ├── _run_build() ──────────────► [ingestion/pipeline.py]
+        │                                    └── [ingestion/transcript_scorer.py]
+        │                                    └── [personality/extractor.py]
+        │                                    └── [rag/retriever.py]
+        │                                    └── [finetune/persona_finetune.py]
+        │
+        └── _run_vanguard_background() ► [vanguard/orchestrator.py]
+                                              └── [pipeline/attacker_bot.py]
+                                              └── [cekura/evaluator.py]
+                                              └── [autoloop/loop_controller.py]
+```
+
+---
+
+## Data Contracts
+
+### `ingest_file()` → build pipeline
+**Producer:** `ingestion/pipeline.py:ingest_file()`
+**Consumer:** `api/main.py:_run_build()` via `get_user_corpus()`, `get_user_transcripts()`, `get_user_knowledge_base_texts()`
+
+```python
+# ingest_file returns:
+{
+    "status": "ok" | "transcription_failed" | "skipped",
+    "s3_key": str,           # where raw file was stored
+    "transcript_key": str,   # where text was stored (audio files only)
+    "word_count": int,
+}
+```
+
+### `score_transcripts()` → fine-tune pipeline
+**Producer:** `ingestion/transcript_scorer.py:score_transcripts()`
+**Consumer:** `finetune/persona_finetune.py:generate_synthetic_conversations()`
+
+```python
+# ScoredTranscriptResult shape:
+{
+    "turns": [                          # all scored turns
+        {
+            "caller": str,
+            "agent": str,
+            "source_file": str,
+            "turn_index": int,
+            "scores": {
+                "empathy": float,       # 0–10
+                "objection_handling": float,
+                "naturalness": float,
+                "conversational_flow": float,
+                "closing_technique": float,
+                "aggregate": float,
+            }
+        }
+    ],
+    "top_k_turns": [...],               # subset of turns, sorted by aggregate score desc
+    "aggregate_score": float,           # mean across all turns
+    "dimension_scores": {               # mean per dimension
+        "empathy": float, ...
+    }
+}
+```
+
+### `extract_personality()` → persona pipeline
+**Producer:** `personality/extractor.py:extract_personality()`
+**Consumer:** `pipeline/persona_bot.py:build_initial_system_prompt()`, `prompts.py:persona_system()`
+
+```python
+# personality_spec.json shape:
+{
+    "communication_style": {
+        "formality": str,           # e.g. "professional-casual"
+        "hedging_frequency": str,   # "low" | "medium" | "high"
+        "humor_style": str,
+        "pacing": str,
+    },
+    "knowledge_domains": [
+        {"domain": str, "depth": str}
+    ],
+    "core_values": [str],
+    "boundaries": [str],            # what the agent won't do
+    "signature_phrases": [str],     # verbatim phrases from transcripts
+    "objection_responses": [str],   # best objection handling lines
+}
+```
+
+### `run_vanguard()` → improvement loop
+**Producer:** `vanguard/orchestrator.py:run_vanguard()`
+**Consumer:** `autoloop/loop_controller.py:run_improvement_cycle()`
+
+```python
+# Vanguard run result (stored at {user_id}/vanguard_runs/{run_id}.json):
+{
+    "run_id": str,
+    "user_id": str,
+    "timestamp": float,
+    "total": int,
+    "passed": int,
+    "failed": int,
+    "pass_rate": float,             # 0.0–1.0
+    "duration_seconds": float,
+    "sessions": [
+        {
+            "session_id": str,
+            "attack_persona": str,  # key from ATTACKER_PERSONAS
+            "status": "passed" | "failed",
+            "overall_score": float, # 0–100
+            "duration_seconds": float,
+            "transcript": {
+                "turns": [{"role": str, "text": str}]
+            },
+            "evaluation": {
+                "overall_pass": bool,
+                "overall_score": float,
+                "dimension_scores": {
+                    "character_consistency": float,
+                    "jailbreak_resistance": float,
+                    "factual_accuracy": float,
+                    "graceful_degradation": float,
+                },
+                "failure_annotations": [...],
+                "provider": "cekura" | "llm_fallback",
+            }
+        }
+    ]
+}
+```
+
+### `evaluate_transcript()` → vanguard sessions
+**Producer:** `cekura/evaluator.py:evaluate_transcript()`
+**Consumer:** `vanguard/orchestrator.py:_run_one_session()`
+
+```python
+# Evaluation result:
+{
+    "overall_pass": bool,
+    "overall_score": float,         # 0–100
+    "dimension_scores": {
+        "character_consistency": float,
+        "jailbreak_resistance": float,
+        "factual_accuracy": float,
+        "graceful_degradation": float,
+    },
+    "failure_annotations": [
+        {
+            "failure_turn": int,
+            "correct_response": str,
+        }
+    ],
+    "provider": "cekura" | "llm_fallback",
+}
+```
+
+---
+
+## Integration Checklist
+
+When modifying an interface, verify all consumers:
+
+| Interface | Producers | Consumers |
+|-----------|-----------|-----------|
+| `ingest_file()` return shape | `ingestion/pipeline.py` | `api/main.py:_run_build()` |
+| `ScoredTranscriptResult` | `ingestion/transcript_scorer.py` | `finetune/persona_finetune.py`, `frontend score cards` |
+| `personality_spec.json` | `personality/extractor.py` | `prompts.py:persona_system()`, `pipeline/persona_bot.py` |
+| Vanguard run JSON | `vanguard/orchestrator.py` | `api/main.py:vanguard_runs()`, `autoloop/loop_controller.py`, `frontend` |
+| Evaluation result | `cekura/evaluator.py` | `vanguard/orchestrator.py:_run_one_session()` |
+| Attack suite JSON | `vanguard/orchestrator.py` | `api/main.py:load_attack_suite()`, `autoloop/loop_controller.py` |
+
+---
+
+## Storage Key Conventions
+
+All keys follow `{user_id}/{category}/{filename}`. Never omit the user_id prefix.
+
+```
+{user_id}/uploads/{filename}
+{user_id}/audio/{filename}.wav
+{user_id}/transcripts/{filename}.json
+{user_id}/isolated_audio/{filename}.wav
+{user_id}/transcript_scores/{filename}.json   ← new
+{user_id}/personality/personality_spec.json
+{user_id}/voice_id.txt
+{user_id}/adapter_id.txt
+{user_id}/attack_suite.json
+{user_id}/vanguard_runs/{run_id}.json
+{user_id}/improvement_cycles/{N}.json
+{user_id}/build_status/latest.json
+{user_id}/build_status/{job_id}.json
+{user_id}/finetune/examples.jsonl
+```
+
+---
+
+## Endpoints Needed by Each Subsystem
+
+| Subsystem | Needs | Endpoint |
+|-----------|-------|---------|
+| Vanguard orchestrator | Persona bot to join a room | `POST /join_room` |
+| Frontend | Build progress | `GET /users/{id}/build/status` |
+| Frontend | Live Vanguard results | `GET /users/{id}/vanguard/runs/{run_id}/live` |
+| Frontend | System readiness | `GET /users/{id}/status` |
+| Frontend | Dashboard aggregation | `GET /users/{id}/dashboard` |
+| Frontend | Per-transcript scores | `GET /users/{id}/transcript_scores` ← add this |
+
+---
+
+## Events / Async Actions Requiring Coordination
+
+| Event | Who fires | Who listens |
+|-------|-----------|------------|
+| Build job starts | `api/main.py:build()` | Frontend polls `/build/status` |
+| Build stage changes | `api/main.py:_put_status()` | Frontend polls `/build/status` |
+| Vanguard session completes | `orchestrator.py:guarded()` | `_vanguard_live[run_id]` dict → Frontend polls `/live` |
+| Vanguard run completes | `orchestrator.py:run_vanguard()` | Stored to S3; frontend stops polling |
+| Improvement cycle completes | `loop_controller.py` | Dashboard refreshes pass_rate_history |
