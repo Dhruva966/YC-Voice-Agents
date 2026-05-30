@@ -449,6 +449,11 @@ async def vanguard_run_live(user_id: str, run_id: str) -> dict[str, Any]:
     return {"sessions": sessions, "complete": complete, "total": len(sessions), "expected_total": expected or 0}
 
 
+@app.get("/users/{user_id}/attack_suite")
+async def get_attack_suite(user_id: str) -> list[dict[str, Any]]:
+    return load_attack_suite(user_id)
+
+
 @app.post("/users/{user_id}/vanguard/improve", response_model=QueuedResponse)
 async def vanguard_improve(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
     runs = await vanguard_runs(user_id)

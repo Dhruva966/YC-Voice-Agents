@@ -129,6 +129,12 @@ type LiveResponse = {
   expected_total: number;
 };
 
+type AttackSuiteItem = {
+  session_id: string;
+  attack_persona: string;
+  status: string;
+};
+
 const SIDEBAR_NAV = [
   { id: "build", label: "Build" },
   { id: "agent", label: "Agent" },
@@ -186,8 +192,15 @@ export default function Page() {
   const [chatFocused, setChatFocused] = useState(false);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [transcriptOpen, setTranscriptOpen] = useState<Set<string>>(new Set());
+  const [attackSuite, setAttackSuite] = useState<AttackSuiteItem[]>([]);
+  const [autoLoopActive, setAutoLoopActive] = useState(false);
+  const [autoLoopCycle, setAutoLoopCycle] = useState(0);
+  const [autoLoopRunning, setAutoLoopRunning] = useState(false);
+  const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
   const improvePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const improveStartCountRef = useRef(0);
+  const autoLoopActiveRef = useRef(false);
+  const autoLoopCycleRef = useRef(0);
 
   const chartData = useMemo(() => {
     const passRates = dashboard.pass_rate_history || [];
@@ -318,7 +331,7 @@ export default function Page() {
         const res = await fetch(pollLive);
         if (!res.ok) return;
         const live: LiveResponse = await res.json();
-        if (live.sessions.length > 0) {
+        if (live.sessions.length > 0 || live.expected_total > 0) {
           setRun((prev) => {
             const base = prev || { run_id: runId, total: 0, passed: 0, failed: 0, pass_rate: 0 };
             const ps = live.sessions.filter((s) => s.status === "passed").length;
@@ -338,6 +351,41 @@ export default function Page() {
           setRunId(null);
           refreshDashboard();
           fetchStatus();
+          // Auto-loop: if < 80% pass rate and loop is active, improve then rerun
+          const ps = live.sessions.filter((s) => s.status === "passed").length;
+          const rate = live.sessions.length > 0 ? ps / live.sessions.length : 0;
+          if (autoLoopActiveRef.current && rate < 0.8 && autoLoopCycleRef.current < 5) {
+            autoLoopCycleRef.current += 1;
+            setAutoLoopCycle(autoLoopCycleRef.current);
+            setAutoLoopRunning(true);
+            // Fire improve, then relaunch after fixed delay
+            setTimeout(async () => {
+              try {
+                await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, { method: "POST" });
+              } catch { /* best-effort */ }
+              // Wait for improvement cycle to process, then relaunch
+              setTimeout(async () => {
+                if (!autoLoopActiveRef.current) { setAutoLoopRunning(false); return; }
+                try {
+                  const r = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
+                  if (r.ok) {
+                    const payload = await r.json();
+                    setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
+                    setExpandedGridSession(new Set());
+                    setRunId(payload.run_id);
+                    refreshDashboard();
+                  }
+                } catch { /* best-effort */ }
+                setAutoLoopRunning(false);
+              }, 22000);
+            }, 1500);
+          } else {
+            setAutoLoopRunning(false);
+            if (autoLoopCycleRef.current >= 5 || rate >= 0.8) {
+              setAutoLoopActive(false);
+              autoLoopActiveRef.current = false;
+            }
+          }
         }
       } catch {
         // silent fail
@@ -419,18 +467,40 @@ export default function Page() {
     setBusy("attack");
     setError(null);
     try {
+      // Pre-fetch attack suite so grid can show named pending cards immediately
+      try {
+        const suiteRes = await fetch(`${API_BASE}/users/${USER_ID}/attack_suite`);
+        if (suiteRes.ok) setAttackSuite(await suiteRes.json());
+      } catch { /* best-effort — grid degrades gracefully */ }
+
       const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
       if (!res.ok) throw new Error("Launch attack failed");
       const payload = await res.json();
       setRunId(payload.run_id);
       setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
       setExpandedSessions(new Set());
+      setExpandedGridSession(new Set());
       setTranscriptOpen(new Set());
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(null);
     }
+  }
+
+  function toggleAutoLoop() {
+    const next = !autoLoopActive;
+    setAutoLoopActive(next);
+    autoLoopActiveRef.current = next;
+    if (!next) { setAutoLoopCycle(0); autoLoopCycleRef.current = 0; setAutoLoopRunning(false); }
+  }
+
+  function toggleGridSession(id: string) {
+    setExpandedGridSession((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }
 
   async function improve() {
@@ -519,6 +589,32 @@ export default function Page() {
 
   return (
     <div className={inter.className} style={{ minHeight: "100vh", display: "flex", background: "#0c0c0d", color: "#f4f4f5" }}>
+      <style>{`
+        @keyframes vg-pop-in {
+          from { opacity: 0; transform: scale(0.82) translateY(10px); }
+          to   { opacity: 1; transform: scale(1)    translateY(0);    }
+        }
+        @keyframes vg-wave-a {
+          0%,100% { height: 3px; } 50% { height: 18px; }
+        }
+        @keyframes vg-wave-b {
+          0%,100% { height: 5px; } 50% { height: 14px; }
+        }
+        @keyframes vg-wave-c {
+          0%,100% { height: 2px; } 50% { height: 20px; }
+        }
+        @keyframes vg-wave-d {
+          0%,100% { height: 6px; } 50% { height: 12px; }
+        }
+        @keyframes vg-glow-green {
+          0%,100% { box-shadow: 0 0 6px rgba(34,197,94,0.15),  inset 0 0 0 0 transparent; }
+          50%      { box-shadow: 0 0 18px rgba(34,197,94,0.35), inset 0 0 0 0 transparent; }
+        }
+        @keyframes vg-glow-red {
+          0%,100% { box-shadow: 0 0 6px rgba(239,68,68,0.15); }
+          50%      { box-shadow: 0 0 18px rgba(239,68,68,0.35); }
+        }
+      `}</style>
       {/* SIDEBAR */}
       <aside style={{
         width: 240, position: "fixed", top: 0, left: 0, bottom: 0,
@@ -902,6 +998,7 @@ export default function Page() {
 
         {/* SECTION 3: VANGUARD */}
         <section id="vanguard" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
+          {/* Header row */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Vanguard</h2>
@@ -913,198 +1010,95 @@ export default function Page() {
               {vanguardRunning && (
                 <span style={{ fontSize: 12, color: "#f59e0b", display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <Loader2 size={12} className="animate-spin" />
-                  {passed + (activeRun?.failed || 0)}/{total} sessions complete
+                  {passed + (activeRun?.failed || 0)}/{total} active
                 </span>
               )}
               {dashboard.attack_suite_size != null && dashboard.attack_suite_size > 0 && (
-                <span style={{ fontSize: 11, color: "#71717a" }}>{dashboard.attack_suite_size} attack variants</span>
+                <span style={{ fontSize: 11, color: "#52525b" }}>{dashboard.attack_suite_size} variants</span>
               )}
             </div>
-            <button
-              onClick={launchAttack}
-              disabled={busy === "attack"}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: busy === "attack" ? "#5b21b6" : "#7c3aed",
-                color: "#fff", fontSize: 13, fontWeight: 500,
-                padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "attack" ? "not-allowed" : "pointer",
-                opacity: busy === "attack" ? 0.6 : 1,
-              }}
-            >
-              {busy === "attack" ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
-              Launch Attack
-            </button>
-          </div>
-          {sessions.length > 0 ? (
-            <div style={{ overflowX: "auto", marginBottom: 16 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #1f1f23" }}>
-                    <th style={{ textAlign: "left", padding: "10px 12px 10px 0", fontWeight: 500, color: "#71717a", fontSize: 12, width: 20 }} />
-                    <th style={{ textAlign: "left", padding: "10px 12px 10px 0", fontWeight: 500, color: "#71717a", fontSize: 12 }}>Persona</th>
-                    <th style={{ textAlign: "left", padding: "10px 12px", fontWeight: 500, color: "#71717a", fontSize: 12 }}>Status</th>
-                    <th style={{ textAlign: "left", padding: "10px 12px", fontWeight: 500, color: "#71717a", fontSize: 12 }}>Score</th>
-                    <th style={{ textAlign: "left", padding: "10px 0 10px 12px", fontWeight: 500, color: "#71717a", fontSize: 12 }}>Duration</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((session) => {
-                    const pName = PERSONA_NAMES[session.attack_persona] || session.attack_persona;
-                    const statusBg = session.status === "passed" ? "#052e16" : session.status === "failed" ? "#1a0505" : session.status === "running" ? "#1c1917" : "#141416";
-                    const statusColor = session.status === "passed" ? "#22c55e" : session.status === "failed" ? "#ef4444" : session.status === "running" ? "#f59e0b" : "#71717a";
-                    const score = session.overall_score != null ? Math.round(session.overall_score) : 0;
-                    const barColor = session.status === "passed" ? "#22c55e" : session.status === "failed" ? "#ef4444" : "#7c3aed";
-                    const isExpanded = expandedSessions.has(session.session_id);
-                    const ds = session.evaluation?.dimension_scores;
-                    const annotations = session.evaluation?.failure_annotations || [];
-                    const firstAnnotation = annotations.length > 0 ? annotations[0] as Record<string, unknown> : null;
-                    return (
-                      <React.Fragment key={session.session_id}>
-                        <tr
-                          onClick={() => toggleSessionExpand(session.session_id)}
-                          style={{ borderBottom: "1px solid #1f1f23", cursor: "pointer" }}
-                        >
-                          <td style={{ padding: "10px 0 10px 0", color: "#52525b" }}>
-                            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          </td>
-                          <td style={{ padding: "10px 12px 10px 0", color: "#f4f4f5" }}>{pName}</td>
-                          <td style={{ padding: "10px 12px" }}>
-                            <span style={{
-                              display: "inline-block", padding: "2px 8px", borderRadius: 6, fontSize: 12,
-                              background: statusBg, color: statusColor,
-                            }}>
-                              {session.status}
-                            </span>
-                          </td>
-                          <td style={{ padding: "10px 12px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ flex: 1, height: 4, background: "#1f1f23", borderRadius: 2, maxWidth: 100 }}>
-                                <div style={{ width: `${score}%`, height: "100%", background: barColor, borderRadius: 2 }} />
-                              </div>
-                              <span style={{ fontSize: 12, color: "#71717a", width: 32, textAlign: "right" }}>{score}%</span>
-                            </div>
-                          </td>
-                          <td style={{ padding: "10px 0 10px 12px", color: "#71717a", fontSize: 12 }}>
-                            {session.duration_seconds ? `${session.duration_seconds.toFixed(0)}s` : "—"}
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr style={{ borderBottom: "1px solid #1f1f23" }}>
-                            <td colSpan={5} style={{ padding: "0 0 12px 32px" }}>
-                              {/* Dimension scores */}
-                              {ds && (
-                                <div style={{ display: "flex", gap: 8, marginBottom: firstAnnotation ? 12 : 0, flexWrap: "wrap" }}>
-                                  <ScorePill label="Char. Consistency" value={ds.character_consistency} />
-                                  <ScorePill label="Jailbreak Resist." value={ds.jailbreak_resistance} />
-                                  <ScorePill label="Factual Accuracy" value={ds.factual_accuracy} />
-                                  <ScorePill label="Graceful Degrade" value={ds.graceful_degradation} />
-                                  {session.evaluation?.provider && (
-                                    <span style={{ fontSize: 10, color: "#52525b", display: "flex", alignItems: "center" }}>
-                                      via {session.evaluation.provider}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                              {/* Failure annotation */}
-                              {firstAnnotation && (
-                                <div style={{
-                                  background: "#1a0505", border: "1px solid #7f1d1d", borderRadius: 6, padding: 12, fontSize: 12,
-                                }}>
-                                  <div style={{ color: "#fca5a5", fontWeight: 500, marginBottom: 6 }}>Failure Annotation</div>
-                                  {firstAnnotation.correct_response != null && (
-                                    <div style={{ color: "#71717a", marginBottom: 4 }}>
-                                      Expected response:
-                                      <div style={{
-                                        background: "#0c0c0d", padding: "8px 12px", borderRadius: 4, marginTop: 4,
-                                        color: "#f4f4f5", fontFamily: "ui-monospace, monospace", fontSize: 11, whiteSpace: "pre-wrap",
-                                      }}>
-                                        {String(firstAnnotation.correct_response)}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {firstAnnotation.failure_turn != null && (
-                                    <div style={{ color: "#71717a", marginTop: 4 }}>
-                                      Failed at turn {String(firstAnnotation.failure_turn)}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                              {/* Transcript viewer */}
-                              {session.transcript?.turns && session.transcript.turns.length > 0 && (
-                                <div style={{ marginTop: 12 }}>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); toggleTranscript(session.session_id); }}
-                                    style={{
-                                      background: "transparent", border: "1px solid #1f1f23", borderRadius: 4,
-                                      color: "#71717a", fontSize: 11, cursor: "pointer", padding: "4px 10px",
-                                    }}
-                                  >
-                                    {transcriptOpen.has(session.session_id) ? "Hide" : "View"} Transcript
-                                  </button>
-                                  {transcriptOpen.has(session.session_id) && (
-                                    <div style={{
-                                      marginTop: 8, background: "#0c0c0d", border: "1px solid #1f1f23",
-                                      borderRadius: 6, padding: 12, maxHeight: 300, overflowY: "auto",
-                                    }}>
-                                      {session.transcript.turns.map((turn, i) => {
-                                        const isAttacker = turn.role === "caller" || turn.role === "user" || turn.role.toLowerCase() === "attacker";
-                                        return (
-                                          <div key={i} style={{
-                                            display: "flex", flexDirection: "column",
-                                            alignItems: isAttacker ? "flex-start" : "flex-end",
-                                            marginBottom: 8,
-                                          }}>
-                                            <span style={{ fontSize: 10, color: isAttacker ? "#f59e0b" : "#71717a", marginBottom: 2 }}>
-                                              {isAttacker ? "ATTACKER" : "AGENT"}
-                                            </span>
-                                            <div style={{
-                                              fontSize: 12, color: "#f4f4f5", lineHeight: 1.4,
-                                              background: isAttacker ? "#1c1917" : "#141416",
-                                              borderRadius: 6, padding: "6px 10px", maxWidth: "80%",
-                                            }}>
-                                              {turn.text}
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Auto-loop toggle */}
+              <button
+                onClick={toggleAutoLoop}
+                title={autoLoopActive ? "Auto-loop ON — will keep improving until ≥80% pass" : "Click to enable auto-improvement loop"}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  background: autoLoopActive ? "#1c1917" : "transparent",
+                  border: `1px solid ${autoLoopActive ? "#f59e0b" : "#27272a"}`,
+                  color: autoLoopActive ? "#f59e0b" : "#52525b",
+                  fontSize: 12, fontWeight: 500, padding: "7px 12px", borderRadius: 6, cursor: "pointer",
+                  transition: "all 0.2s",
+                }}
+              >
+                <Activity size={13} />
+                Auto-loop {autoLoopActive ? "ON" : "OFF"}
+              </button>
+              <button
+                onClick={launchAttack}
+                disabled={busy === "attack"}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  background: busy === "attack" ? "#5b21b6" : "#7c3aed",
+                  color: "#fff", fontSize: 13, fontWeight: 500,
+                  padding: "8px 16px", borderRadius: 6, border: "none",
+                  cursor: busy === "attack" ? "not-allowed" : "pointer",
+                  opacity: busy === "attack" ? 0.6 : 1,
+                }}
+              >
+                {busy === "attack" ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
+                Launch Attack
+              </button>
             </div>
+          </div>
+
+          {/* Auto-loop status banner */}
+          {(autoLoopRunning || (autoLoopActive && autoLoopCycle > 0)) && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              background: "#1c1917", border: "1px solid #78350f",
+              borderRadius: 6, padding: "10px 16px", marginBottom: 16,
+            }}>
+              <Loader2 size={13} className="animate-spin" color="#f59e0b" />
+              <span style={{ fontSize: 13, color: "#fbbf24" }}>
+                Auto-improving — cycle {autoLoopCycle}/5
+                {autoLoopRunning && !vanguardRunning ? " · running improvement cycle…" : ""}
+              </span>
+            </div>
+          )}
+
+          {/* VANGUARD GRID */}
+          {(sessions.length > 0 || attackSuite.length > 0 || (runId && total > 0)) ? (
+            <>
+              <VanguardGrid
+                suite={attackSuite}
+                sessions={sessions}
+                expectedTotal={total}
+                expandedSessions={expandedGridSession}
+                onToggleSession={toggleGridSession}
+              />
+            </>
           ) : (
             <div style={{
               background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 48,
               textAlign: "center", color: "#71717a", fontSize: 13, marginBottom: 16,
             }}>
-              No sessions yet. Click Launch Attack to begin real adversarial testing.
+              No sessions yet. Click &ldquo;Launch Attack&rdquo; to begin adversarial testing.
             </div>
           )}
 
           {/* WORST PERSONAS */}
           {worstPersonas.length > 0 && (
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
+            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16, marginTop: 16 }}>
               <div style={{ fontSize: 11, color: "#71717a", fontWeight: 600, marginBottom: 12 }}>Weakest Attack Categories</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {worstPersonas.map((item) => {
                   const pName = PERSONA_NAMES[item.persona] || item.persona;
                   const ratePct = Math.round(item.pass_rate * 100);
                   return (
-                    <div key={item.persona} style={{
-                      display: "flex", alignItems: "center", gap: 12, fontSize: 12,
-                    }}>
+                    <div key={item.persona} style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
                       <span style={{ width: 120, color: "#f4f4f5", flexShrink: 0 }}>{pName}</span>
-                      <span style={{ color: "#71717a", width: 80, flexShrink: 0 }}>
-                        {item.passed}/{item.runs} passed
-                      </span>
+                      <span style={{ color: "#71717a", width: 80, flexShrink: 0 }}>{item.passed}/{item.runs} passed</span>
                       <div style={{ flex: 1, height: 4, background: "#1f1f23", borderRadius: 2 }}>
                         <div style={{
                           width: `${ratePct}%`, height: "100%",
@@ -1112,10 +1106,7 @@ export default function Page() {
                           borderRadius: 2,
                         }} />
                       </div>
-                      <span style={{
-                        color: ratePct >= 60 ? "#22c55e" : ratePct >= 30 ? "#f59e0b" : "#ef4444",
-                        width: 32, textAlign: "right",
-                      }}>
+                      <span style={{ color: ratePct >= 60 ? "#22c55e" : ratePct >= 30 ? "#f59e0b" : "#ef4444", width: 32, textAlign: "right" }}>
                         {ratePct}%
                       </span>
                     </div>
@@ -1214,6 +1205,255 @@ function ScorePill({ label, value }: { label: string; value?: number }) {
     }}>
       <span style={{ color: "#71717a" }}>{label}:</span>
       <span style={{ color, fontWeight: 600 }}>{value}%</span>
+    </div>
+  );
+}
+
+// ─── Vanguard Grid Components ──────────────────────────────────────────────────
+
+const WAVE_CONFIGS = [
+  { anim: "vg-wave-a", dur: "0.72s", delay: "0ms"   },
+  { anim: "vg-wave-c", dur: "0.95s", delay: "70ms"  },
+  { anim: "vg-wave-b", dur: "0.81s", delay: "140ms" },
+  { anim: "vg-wave-d", dur: "0.68s", delay: "30ms"  },
+  { anim: "vg-wave-a", dur: "1.05s", delay: "200ms" },
+  { anim: "vg-wave-c", dur: "0.77s", delay: "110ms" },
+  { anim: "vg-wave-b", dur: "0.90s", delay: "260ms" },
+  { anim: "vg-wave-d", dur: "0.65s", delay: "55ms"  },
+];
+
+function Waveform({ color, active }: { color: string; active: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 22 }}>
+      {WAVE_CONFIGS.map((cfg, i) => (
+        <div
+          key={i}
+          style={{
+            width: 3, borderRadius: 2,
+            background: active ? color : "#27272a",
+            height: active ? undefined : 3,
+            minHeight: 3,
+            animation: active
+              ? `${cfg.anim} ${cfg.dur} ease-in-out ${cfg.delay} infinite alternate`
+              : "none",
+            transition: "background 0.4s",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VanguardCard({
+  session, personaName, index, isExpanded, onToggle,
+}: {
+  session: VanguardSession | null;
+  personaName: string;
+  index: number;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  const status = session?.status ?? "queued";
+  const isPassed  = status === "passed";
+  const isFailed  = status === "failed";
+  const isRunning = status === "running";
+  const isDone    = isPassed || isFailed;
+  const score     = session?.overall_score != null ? Math.round(session.overall_score) : null;
+  const hasTx     = (session?.transcript?.turns?.length ?? 0) > 0;
+
+  const borderColor = isPassed ? "#22c55e" : isFailed ? "#ef4444" : isRunning ? "#6d28d9" : "#1f1f23";
+  const glowAnim    = isPassed ? "vg-glow-green 2.5s ease-in-out infinite"
+                    : isFailed ? "vg-glow-red 2.5s ease-in-out infinite"
+                    : "none";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <div
+        onClick={hasTx ? onToggle : undefined}
+        style={{
+          background: "#141416",
+          border: `${isDone ? 2 : 1}px solid ${borderColor}`,
+          borderRadius: 8,
+          padding: 14,
+          cursor: hasTx ? "pointer" : "default",
+          animation: `vg-pop-in 0.32s ease-out ${index * 65}ms both, ${glowAnim}`,
+          transition: "border-color 0.5s",
+          display: "flex", flexDirection: "column", gap: 10,
+          minHeight: 152,
+        }}
+      >
+        {/* Header: persona + status badge */}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#f4f4f5", lineHeight: 1.3, flex: 1 }}>
+            {personaName}
+          </span>
+          <span style={{
+            fontSize: 10, fontWeight: 500, padding: "2px 7px", borderRadius: 4, flexShrink: 0,
+            background: isPassed ? "#052e16" : isFailed ? "#1a0505" : isRunning ? "#1c1917" : "#1f1f23",
+            color:      isPassed ? "#22c55e" : isFailed ? "#ef4444" : isRunning ? "#f59e0b" : "#52525b",
+          }}>
+            {status}
+          </span>
+        </div>
+
+        {/* Waveforms or placeholder dots */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 7 }}>
+          {(isRunning || isDone) && session ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 9, color: "#71717a", width: 46, flexShrink: 0, letterSpacing: "0.05em" }}>ATTACKER</span>
+                <Waveform color="#f59e0b" active={isRunning} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 9, color: "#71717a", width: 46, flexShrink: 0, letterSpacing: "0.05em" }}>AGENT</span>
+                <Waveform color="#7c3aed" active={isRunning} />
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", gap: 5, justifyContent: "center", paddingTop: 4 }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: "#27272a" }} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Score bar + duration (when done) */}
+        {isDone && score !== null && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, height: 3, background: "#27272a", borderRadius: 2 }}>
+              <div style={{
+                width: `${score}%`, height: "100%", borderRadius: 2,
+                background: isPassed ? "#22c55e" : "#ef4444",
+                transition: "width 0.6s ease-out",
+              }} />
+            </div>
+            <span style={{ fontSize: 11, color: "#a1a1aa", width: 30, textAlign: "right" }}>{score}%</span>
+            {session?.duration_seconds && (
+              <span style={{ fontSize: 10, color: "#52525b", width: 26 }}>
+                {Math.round(session.duration_seconds)}s
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Transcript hint */}
+        {isDone && hasTx && (
+          <div style={{ fontSize: 10, color: "#52525b", display: "flex", alignItems: "center", gap: 4 }}>
+            <ChevronDown size={10} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+            {isExpanded ? "Hide transcript" : "View transcript"}
+          </div>
+        )}
+      </div>
+
+      {/* Transcript panel (expanded below card) */}
+      {isExpanded && hasTx && session?.transcript?.turns && (
+        <div style={{
+          background: "#0c0c0d", border: "1px solid #1f1f23", borderTop: "none",
+          borderRadius: "0 0 8px 8px", padding: 12,
+          maxHeight: 240, overflowY: "auto",
+        }}>
+          {/* Dimension scores row */}
+          {session.evaluation?.dimension_scores && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              <ScorePill label="Consistency" value={session.evaluation.dimension_scores.character_consistency} />
+              <ScorePill label="Jailbreak"   value={session.evaluation.dimension_scores.jailbreak_resistance} />
+              <ScorePill label="Factual"     value={session.evaluation.dimension_scores.factual_accuracy} />
+              <ScorePill label="Degrade"     value={session.evaluation.dimension_scores.graceful_degradation} />
+              {session.evaluation.provider && (
+                <span style={{ fontSize: 10, color: "#52525b", display: "flex", alignItems: "center" }}>
+                  via {session.evaluation.provider}
+                </span>
+              )}
+            </div>
+          )}
+          {/* Chat bubbles */}
+          {session.transcript.turns.map((turn, i) => {
+            const isAtk = turn.role === "caller" || turn.role === "user" || turn.role.toLowerCase() === "attacker";
+            return (
+              <div key={i} style={{
+                display: "flex", flexDirection: "column",
+                alignItems: isAtk ? "flex-start" : "flex-end", marginBottom: 7,
+              }}>
+                <span style={{ fontSize: 9, color: isAtk ? "#f59e0b" : "#71717a", marginBottom: 2, letterSpacing: "0.05em" }}>
+                  {isAtk ? "ATTACKER" : "AGENT"}
+                </span>
+                <div style={{
+                  fontSize: 11, color: "#f4f4f5", lineHeight: 1.45,
+                  background: isAtk ? "#1c1917" : "#18181b",
+                  borderRadius: 6, padding: "5px 9px", maxWidth: "90%",
+                }}>
+                  {turn.text}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VanguardGrid({
+  suite, sessions, expectedTotal, expandedSessions, onToggleSession,
+}: {
+  suite: AttackSuiteItem[];
+  sessions: VanguardSession[];
+  expectedTotal: number;
+  expandedSessions: Set<string>;
+  onToggleSession: (id: string) => void;
+}) {
+  // Build ordered slots: prefer suite order, fall back to live sessions order
+  const sessionMap = new Map(sessions.map((s) => [s.session_id, s]));
+
+  type Slot = { personaName: string; session: VanguardSession | null; key: string };
+  let slots: Slot[];
+
+  if (suite.length > 0) {
+    slots = suite.map((item) => ({
+      key: item.session_id,
+      personaName: PERSONA_NAMES[item.attack_persona] || item.attack_persona,
+      session: sessionMap.get(item.session_id) ?? null,
+    }));
+    // Append any sessions not in suite (edge case)
+    sessions.forEach((s) => {
+      if (!slots.find((sl) => sl.key === s.session_id)) {
+        slots.push({ key: s.session_id, personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona, session: s });
+      }
+    });
+  } else {
+    // No suite pre-loaded: show live sessions + placeholder slots
+    const liveSlots: Slot[] = sessions.map((s) => ({
+      key: s.session_id,
+      personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona,
+      session: s,
+    }));
+    const placeholderCount = Math.max(0, expectedTotal - liveSlots.length);
+    const placeholders: Slot[] = Array.from({ length: placeholderCount }, (_, i) => ({
+      key: `placeholder-${i}`,
+      personaName: `Room ${liveSlots.length + i + 1}`,
+      session: null,
+    }));
+    slots = [...liveSlots, ...placeholders];
+  }
+
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "repeat(4, 1fr)",
+      gap: 12,
+      marginBottom: 16,
+    }}>
+      {slots.map((slot, i) => (
+        <VanguardCard
+          key={slot.key}
+          index={i}
+          personaName={slot.personaName}
+          session={slot.session}
+          isExpanded={slot.session ? expandedSessions.has(slot.session.session_id) : false}
+          onToggle={() => slot.session && onToggleSession(slot.session.session_id)}
+        />
+      ))}
     </div>
   );
 }
