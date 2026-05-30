@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import time
@@ -15,6 +16,14 @@ from storage import s3_client as _s3_client, bucket_name as _bucket
 from cekura.evaluator import evaluate_transcript
 from pipeline.attacker_bot import run_attacker_bot
 from prompts import ATTACKER_PERSONAS
+
+# Dedicated executor for attacker bots. Each session calls asyncio.run() internally,
+# blocking the thread for the full session duration. A separate pool prevents
+# Vanguard from saturating the shared asyncio default thread pool (8 threads on a
+# 4-core machine) and deadlocking concurrent asyncio.to_thread() calls in FastAPI.
+_VANGUARD_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=20, thread_name_prefix="vanguard"
+)
 
 
 def _fresh_session(session: dict[str, Any]) -> dict[str, Any]:
@@ -78,13 +87,16 @@ async def _run_one_session(user_id: str, persona_agent_url: str, session: dict[s
         join_response.raise_for_status()
 
     await asyncio.sleep(2)
-    transcript = await asyncio.to_thread(
-        run_attacker_bot,
-        session["session_id"],
-        session["attack_persona"],
-        daily["room_url"],
-        daily["attacker_token"],
-        system_prompt=session.get("system_prompt"),
+    loop = asyncio.get_event_loop()
+    transcript = await loop.run_in_executor(
+        _VANGUARD_EXECUTOR,
+        lambda: run_attacker_bot(
+            session["session_id"],
+            session["attack_persona"],
+            daily["room_url"],
+            daily["attacker_token"],
+            system_prompt=session.get("system_prompt"),
+        ),
     )
     evaluation = await evaluate_transcript(
         session["session_id"],

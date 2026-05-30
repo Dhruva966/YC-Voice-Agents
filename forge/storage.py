@@ -31,8 +31,12 @@ class _LocalS3Client:
     """Minimal S3-compatible client backed by the local filesystem."""
 
     def _path(self, key: str) -> Path:
-        # Prevent path traversal: resolve to absolute and assert we stay inside local_data
+        # Prevent path traversal. Check for any ".." path component first (handles
+        # single-segment cases like "user/../other" that resolve() alone would allow
+        # because the result still falls inside LOCAL_DATA_DIR).
         safe_key = key.lstrip("/")
+        if ".." in Path(safe_key).parts:
+            raise ValueError(f"Path traversal blocked: {key!r}")
         dest = (_LOCAL_DATA_DIR / safe_key).resolve()
         base = _LOCAL_DATA_DIR.resolve()
         try:

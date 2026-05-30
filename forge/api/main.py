@@ -370,9 +370,16 @@ async def build_status(user_id: str) -> dict[str, Any]:
         raise
 
 
+_ALLOWED_ROOM_DOMAINS = {"daily.co"}
+
+
 @app.post("/join_room")
 async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    import urllib.parse
     user_id = _validate_user_id(request.user_id)
+    parsed = urllib.parse.urlparse(request.room_url)
+    if not any(parsed.netloc == d or parsed.netloc.endswith("." + d) for d in _ALLOWED_ROOM_DOMAINS):
+        raise HTTPException(status_code=400, detail="Invalid room_url: must be a daily.co room")
     _require_built_user(user_id)
     background_tasks.add_task(
         run_persona_bot,
@@ -395,6 +402,8 @@ async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallRes
 
 async def _twilio_inbound_response(request: Request, user_id: str) -> Response:
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if not auth_token:
+        LOGGER.warning("SECURITY: TWILIO_AUTH_TOKEN not set — webhook requests are NOT authenticated")
     if auth_token:
         validator = _TwilioRequestValidator(auth_token)
         signature = request.headers.get("X-Twilio-Signature", "")
@@ -591,7 +600,9 @@ async def vanguard_run_result(user_id: str, run_id: str) -> dict[str, Any]:
     user_id = _validate_user_id(user_id)
     if not _UUID_RE.match(run_id) and not _CYCLE_RUN_RE.match(run_id):
         raise HTTPException(status_code=400, detail="Invalid run_id format")
-    return _get_json_key(f"{user_id}/vanguard_runs/{run_id}.json")
+    data = _get_json_key(f"{user_id}/vanguard_runs/{run_id}.json")
+    data.pop("persona_agent_url", None)  # don't expose internal service topology
+    return data
 
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}/live")

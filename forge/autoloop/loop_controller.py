@@ -37,6 +37,7 @@ def _call_json_prompt(prompt: dict[str, str]) -> dict[str, Any]:
             {"role": "user", "content": prompt["user"]},
         ],
         temperature=0,
+        response_format={"type": "json_object"},
     )
     raw = response.choices[0].message.content or "{}"
     raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -81,7 +82,12 @@ def run_improvement_cycle(
         )
         annotation = _call_json_prompt(prompt)
         annotations.append(annotation)
-        history = _conversation_history_until_failure(session.get("transcript", {}), int(annotation.get("failure_turn", 0)))
+        turns = session.get("transcript", {}).get("turns", [])
+        try:
+            failure_turn = max(0, min(int(float(annotation.get("failure_turn") or 0)), len(turns)))
+        except (TypeError, ValueError):
+            failure_turn = 0
+        history = _conversation_history_until_failure(session.get("transcript", {}), failure_turn)
         examples.append(
             finetune_example_formatter(
                 persona_system_prompt,
@@ -103,7 +109,7 @@ def run_improvement_cycle(
     else:
         LOGGER.info("no_failed_sessions_to_fine_tune")
 
-    persona_agent_url = vanguard_summary.get("persona_agent_url", "http://backend:8000")
+    persona_agent_url = os.getenv("PERSONA_AGENT_URL", "http://backend:8000")
     regression_suite = [
         {
             "session_id": str(uuid.uuid4()),
