@@ -36,10 +36,18 @@ Contracts between subsystems. Read this when touching an interface boundary.
 ```python
 # ingest_file returns:
 {
-    "status": "ok" | "transcription_failed" | "skipped",
-    "s3_key": str,           # where raw file was stored
-    "transcript_key": str,   # where text was stored (audio files only)
-    "word_count": int,
+    "job_id": str,
+    "user_id": str,
+    "input_type": "audio" | "text" | "pdf" | "docx",
+    "s3_original_path": str,
+    "s3_transcript_path": str | None,
+    "s3_isolated_audio_path": str | None,
+    "s3_corpus_path": str | None,
+    "s3_knowledge_base_path": str | None,
+    "speakers": list,
+    "quality": dict,
+    "status": "completed" | "failed",
+    "errors": list[str],
 }
 ```
 
@@ -115,8 +123,9 @@ Contracts between subsystems. Read this when touching an interface boundary.
     "sessions": [
         {
             "session_id": str,
+            "attack_definition_id": str, # original attack_suite item id, if present
             "attack_persona": str,  # key from ATTACKER_PERSONAS
-            "status": "passed" | "failed",
+            "status": "running" | "passed" | "failed",
             "overall_score": float, # 0–100
             "duration_seconds": float,
             "transcript": {
@@ -179,6 +188,8 @@ When modifying an interface, verify all consumers:
 | Evaluation result | `forge/cekura/evaluator.py` | `forge/vanguard/orchestrator.py:_run_one_session()` |
 | Attack suite JSON | `forge/vanguard/orchestrator.py` | `forge/api/main.py:load_attack_suite()`, `forge/autoloop/loop_controller.py` |
 
+Note: `attack_suite.json` stores reusable attack definitions. `run_vanguard()` must create fresh `session_id` values per run because Daily rooms and external evaluators key by session.
+
 ---
 
 ## Storage Key Conventions
@@ -214,6 +225,7 @@ All keys follow `{user_id}/{category}/{filename}`. Never omit the user_id prefix
 | Frontend | System readiness | `GET /users/{id}/status` |
 | Frontend | Dashboard aggregation | `GET /users/{id}/dashboard` |
 | Frontend | Per-transcript scores | `GET /users/{id}/transcript_scores` ← add this |
+| Twilio | User-scoped inbound webhook | `POST /users/{id}/webhook/twilio/inbound` |
 
 ---
 

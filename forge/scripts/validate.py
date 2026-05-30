@@ -148,7 +148,8 @@ except Exception as exc:
 try:
     nvidia_base_url = os.getenv("NVIDIA_BASE_URL", "").rstrip("/")
     nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
-    embedding_model = os.getenv("NVIDIA_EMBEDDING_MODEL", "nvidia/llama-3.2-nv-embedqa-1b-v2")
+    embedding_model = os.getenv("NVIDIA_EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-1b-v2")
+    embedding_dimensions = int(os.getenv("NVIDIA_EMBEDDING_DIMENSIONS", "1024"))
 
     status, body = _post(
         f"{nvidia_base_url}/embeddings",
@@ -160,12 +161,18 @@ try:
             "model": embedding_model,
             "input": ["test embedding string"],
             "input_type": "passage",
+            "dimensions": embedding_dimensions,
         },
     )
     if status == 200:
         data = json.loads(body)
         embedding = data.get("data", [{}])[0].get("embedding", [])
-        check(3, "NVIDIA NIM embedding model", True, f"vector dim: {len(embedding)}")
+        check(
+            3,
+            "NVIDIA NIM embedding model",
+            len(embedding) == embedding_dimensions,
+            f"vector dim: {len(embedding)} expected: {embedding_dimensions}",
+        )
     else:
         check(3, "NVIDIA NIM embedding model", False, f"HTTP {status}: {body[:200]}")
 except Exception as exc:
@@ -232,7 +239,7 @@ except Exception as exc:
 
 
 # ---------------------------------------------------------------------------
-# Check 8: RAG build_knowledge_base() ingests one sample text for user "demo"
+# Check 8: RAG build_knowledge_base() ingests one sample text for an isolated validation user
 # ---------------------------------------------------------------------------
 try:
     # init_db may have already been called; import defensively
@@ -244,21 +251,21 @@ try:
         "Forge is a voice AI system that validates persona agents before production. "
         "It uses NVIDIA NIM for scoring and Gemini Live for the persona voice pipeline."
     )
-    inserted = _bkb("demo", [sample_text], "validate_script")
+    inserted = _bkb("validate_check", [sample_text], "validate_script")
     check(8, "RAG build_knowledge_base()", True, f"inserted/upserted {inserted} chunk(s)")
 except Exception as exc:
     check(8, "RAG build_knowledge_base()", False, str(exc))
 
 
 # ---------------------------------------------------------------------------
-# Check 9: RAG retrieve() returns results for user "demo"
+# Check 9: RAG retrieve() returns results for the isolated validation user
 # ---------------------------------------------------------------------------
 try:
     try:
         _retrieve = retrieve
     except NameError:
         from rag.retriever import retrieve as _retrieve  # type: ignore
-    results = _retrieve("demo", "What is Forge?", top_k=3)
+    results = _retrieve("validate_check", "What is Forge?", top_k=3)
     if results:
         check(9, "RAG retrieve()", True, f"{len(results)} chunk(s) returned")
     else:
@@ -336,3 +343,5 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 print()
 print(f"{passed}/{total} checks passed, {skipped} skipped.")
+if passed + skipped < total:
+    sys.exit(1)

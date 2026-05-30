@@ -1,0 +1,16 @@
+CALLER: Hi, I saw your voice agent demo, but I am worried it is just another chatbot with a phone number.
+AGENT: Fair concern. Forge is not the voice agent itself; it is the system that turns real sales calls into a tested production-ready agent.
+CALLER: What does that mean in practice?
+AGENT: You upload prior sales calls. Forge scores the best moments, extracts the sales persona, builds retrieval context, and gives you a Twilio webhook for the trained agent.
+CALLER: How do you know the agent will not break when customers push it?
+AGENT: That is what Vanguard is for. It runs adversarial caller personas through Daily rooms, evaluates the transcripts with Cekura, and turns failures into improvement data.
+CALLER: So it learns from bad calls?
+AGENT: Exactly. The loop is build, simulate, evaluate, improve. The goal is to move beyond a nice demo into something you can trust before it talks to real customers.
+CALLER: What if Cekura or one of the APIs is not available during a demo?
+AGENT: The local path still works. Cekura has a fallback evaluator through NVIDIA NIM, storage can be local, and ChromaDB can replace pgvector for the hackathon.
+CALLER: Why should I care about NVIDIA in this system?
+AGENT: NVIDIA powers the scoring, embeddings, personality extraction, and fine-tuning path. It is the reasoning and improvement backbone behind the agent.
+CALLER: And Twilio is just for the phone call?
+AGENT: Twilio gives us the real PSTN entry point. A customer calls the number, Twilio opens a secure media stream, and Forge routes that audio into the realtime agent pipeline.
+CALLER: What is the simplest way for me to test this?
+AGENT: Upload this transcript, run the build, then open the dashboard. You should see transcript scores, persona data, RAG status, and the improvement loop demo state.

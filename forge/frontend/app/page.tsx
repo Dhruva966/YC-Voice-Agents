@@ -1,6 +1,6 @@
 "use client";
 
-import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Inter } from "next/font/google";
 import {
@@ -15,9 +15,11 @@ const inter = Inter({ subsets: ["latin"] });
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 const USER_ID = "demo";
 
-const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Score Transcripts", "Configure Voice", "Build RAG", "Fine-tune"];
+const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Configure Voice", "Score Transcripts", "Build RAG", "Fine-tune"];
 
 const PERSONA_NAMES: Record<string, string> = {
+  unauthorized_commitment: "Unauthorized Commitment",
+  pii_exfiltration: "PII Exfiltration",
   social_engineer: "Social Engineer",
   jailbreaker: "Jailbreaker",
   emotional_escalator: "Emotional Escalator",
@@ -50,6 +52,7 @@ type TranscriptTurn = {
 
 type VanguardSession = {
   session_id: string;
+  attack_definition_id?: string;
   attack_persona: string;
   status: string;
   overall_score?: number;
@@ -69,6 +72,7 @@ type VanguardRun = {
 
 type SystemStatus = {
   personality_spec_ready: boolean;
+  voice_runtime_ready?: boolean;
   voice_clone_ready: boolean;
   rag_ready: boolean;
   vanguard_runs: number;
@@ -110,14 +114,6 @@ type DimensionScoreCard = {
   closing_technique: number;
 };
 
-const DIMENSION_LABELS: Record<string, string> = {
-  closing_technique: "Loan Knowledge",
-  objection_handling: "Objection Handling",
-  empathy: "Empathy",
-  naturalness: "Naturalness",
-  conversational_flow: "Conversational Flow",
-};
-
 type TranscriptScores = {
   aggregate_score: number;
   dimension_scores: DimensionScoreCard;
@@ -135,6 +131,7 @@ type LiveResponse = {
   complete: boolean;
   total: number;
   expected_total: number;
+  error?: boolean;
 };
 
 type AttackSuiteItem = {
@@ -178,13 +175,14 @@ const ImprovementChartNoSsr = dynamic(() => Promise.resolve(ImprovementChart), {
 
 export default function Page() {
   const [activeSection, setActiveSection] = useState("build");
-  const [files, setFiles] = useState<File[]>([]);
+  const [rawText, setRawText] = useState<string>("");
   const [completedSteps, setCompletedSteps] = useState<string[]>([]);
   const [buildJobId, setBuildJobId] = useState<string | null>(null);
   const [buildStage, setBuildStage] = useState<string | null>(null);
   const [callInfo, setCallInfo] = useState<{ room_url: string } | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [run, setRun] = useState<VanguardRun | null>(null);
+  const [hydratedRun, setHydratedRun] = useState<VanguardRun | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>({});
   const [statusInfo, setStatusInfo] = useState<SystemStatus | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -205,7 +203,6 @@ export default function Page() {
   const [autoLoopCycle, setAutoLoopCycle] = useState(0);
   const [autoLoopRunning, setAutoLoopRunning] = useState(false);
   const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
-  const [nimMode, setNimMode] = useState<"self_hosted" | "cloud" | null>(null);
   const improvePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const improveStartCountRef = useRef(0);
   const autoLoopActiveRef = useRef(false);
@@ -242,17 +239,18 @@ export default function Page() {
     ? "#ef4444"
     : "#52525b";
 
-  const activeRun = run || dashboard.latest_vanguard_run_summary || null;
+  const activeRun = run || hydratedRun || dashboard.latest_vanguard_run_summary || null;
   const total = activeRun?.total || 0;
   const passed = activeRun?.passed || 0;
   const passRate = total ? Math.round((passed / total) * 100) : 0;
-  const vanguardRunning = !!runId && total > 0 && (passed + (activeRun?.failed || 0)) < total;
+  const vanguardRunning = !!runId && (total === 0 || (passed + (activeRun?.failed || 0)) < total);
+  const agentReady = !!statusInfo?.personality_spec_ready && !!statusInfo?.rag_ready;
 
   const isFineTuneReady = !!dashboard.adapter_id;
 
   const statusItems = useMemo(() => [
     { key: "personality_spec_ready", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
-    { key: "voice_clone_ready", label: "Voice Ready", ready: statusInfo?.voice_clone_ready || false },
+    { key: "voice_runtime_ready", label: "Gemini Voice", ready: statusInfo?.voice_runtime_ready ?? statusInfo?.voice_clone_ready ?? false },
     { key: "rag_ready", label: "RAG", ready: statusInfo?.rag_ready || false },
     { key: "finetune", label: "Fine-tune", ready: isFineTuneReady },
     { key: "vanguard", label: "Vanguard", ready: (statusInfo?.vanguard_runs || 0) > 0 },
@@ -275,19 +273,13 @@ export default function Page() {
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/dashboard`);
       if (res.ok) {
-        setDashboard(await res.json());
-      }
-    } catch {
-      // silent fail
-    }
-  }
-
-  async function fetchNimStatus() {
-    try {
-      const res = await fetch(`${API_BASE}/health/nim`);
-      if (res.ok) {
-        const data = await res.json();
-        setNimMode(data.nim_mode === "self_hosted" ? "self_hosted" : "cloud");
+        const nextDashboard: Dashboard = await res.json();
+        setDashboard(nextDashboard);
+        const latestRunId = nextDashboard.latest_vanguard_run_summary?.run_id;
+        if (latestRunId) {
+          const runRes = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/runs/${latestRunId}`);
+          if (runRes.ok) setHydratedRun(await runRes.json());
+        }
       }
     } catch {
       // silent fail
@@ -307,7 +299,6 @@ export default function Page() {
     fetchStatus();
     refreshDashboard();
     fetchTranscriptScores();
-    fetchNimStatus();
     const statusTimer = setInterval(fetchStatus, 30000);
     const dashTimer = setInterval(refreshDashboard, 15000);
     return () => { clearInterval(statusTimer); clearInterval(dashTimer); };
@@ -320,19 +311,24 @@ export default function Page() {
         const res = await fetch(`${API_BASE}/users/${USER_ID}/build/status`);
         if (!res.ok) return;
         const status: BuildStatus = await res.json();
-        const nextSteps = new Set(completedSteps);
-        if (status.stage.includes("personality")) nextSteps.add("Extract Personality");
-        if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") nextSteps.add("Score Transcripts");
-        if (status.stage.includes("voice")) nextSteps.add("Configure Voice");
-        if (status.stage.includes("rag")) nextSteps.add("Build RAG");
-        if (status.stage.includes("fine")) nextSteps.add("Fine-tune");
-        if (status.status === "completed") BUILD_STEPS.forEach((s) => nextSteps.add(s));
-        setCompletedSteps(Array.from(nextSteps));
+        setCompletedSteps((prev) => {
+          const next = new Set(prev);
+          if (status.stage.includes("personality")) next.add("Extract Personality");
+          if (status.stage.includes("voice")) next.add("Configure Voice");
+          if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") next.add("Score Transcripts");
+          if (status.stage.includes("rag")) next.add("Build RAG");
+          if (status.stage.includes("fine")) next.add("Fine-tune");
+          if (status.status === "completed") BUILD_STEPS.forEach((s) => next.add(s));
+          return Array.from(next);
+        });
         setBuildStage(status.stage);
         if (status.status === "completed" || status.status === "failed") {
           window.clearInterval(timer);
           refreshDashboard();
           fetchStatus();
+          if (status.status === "failed") {
+            setError(status.error || "Build pipeline failed");
+          }
           if (status.status === "completed") {
             fetchTranscriptScores();
           }
@@ -342,7 +338,7 @@ export default function Page() {
       }
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [buildJobId, completedSteps]);
+  }, [buildJobId]);
 
   useEffect(() => {
     if (!runId) return;
@@ -373,6 +369,11 @@ export default function Page() {
           setRunId(null);
           refreshDashboard();
           fetchStatus();
+          if (live.error) {
+            setError("Vanguard failed before sessions completed. Check backend logs and API key configuration.");
+            setAutoLoopRunning(false);
+            return;
+          }
           // Auto-loop: if < 80% pass rate and loop is active, improve then rerun
           const ps = live.sessions.filter((s) => s.status === "passed").length;
           const rate = live.sessions.length > 0 ? ps / live.sessions.length : 0;
@@ -445,23 +446,23 @@ export default function Page() {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
   }
 
-  function removeFile(index: number) {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-  }
-
   async function uploadAndBuild() {
     setBusy("build");
     setCompletedSteps([]);
     setError(null);
     try {
-      for (const file of files) {
-        const body = new FormData();
-        body.append("file", file);
-        const res = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, { method: "POST", body });
-        if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
-      }
+      const blob = new Blob([rawText], { type: "text/plain" });
+      const file = new File([blob], "transcripts.txt", { type: "text/plain" });
+      const body = new FormData();
+      body.append("file", file);
+      const ingestRes = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, { method: "POST", body });
+      if (!ingestRes.ok) throw new Error("Upload failed");
       setCompletedSteps(["Ingest", "Transcribe"]);
       const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, { method: "POST" });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || "Build failed to start");
+      }
       const payload = await res.json();
       setBuildJobId(payload.job_id);
     } catch (e) {
@@ -474,6 +475,11 @@ export default function Page() {
   async function callAgent() {
     setBusy("call");
     setError(null);
+    if (!agentReady) {
+      setBusy(null);
+      setError("Build must complete before starting the voice agent.");
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/call`, { method: "POST" });
       if (!res.ok) throw new Error("Call agent failed");
@@ -488,6 +494,11 @@ export default function Page() {
   async function launchAttack() {
     setBusy("attack");
     setError(null);
+    if (!agentReady) {
+      setBusy(null);
+      setError("Build must complete before launching Vanguard.");
+      return;
+    }
     try {
       // Pre-fetch attack suite so grid can show named pending cards immediately
       try {
@@ -496,7 +507,10 @@ export default function Page() {
       } catch { /* best-effort — grid degrades gracefully */ }
 
       const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
-      if (!res.ok) throw new Error("Launch attack failed");
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || "Launch attack failed");
+      }
       const payload = await res.json();
       setRunId(payload.run_id);
       setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
@@ -590,8 +604,8 @@ export default function Page() {
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
     if (stage.includes("personality")) return 2;
-    if (stage.includes("scoring")) return 3;
-    if (stage.includes("voice")) return 4;
+    if (stage.includes("voice")) return 3;
+    if (stage.includes("scoring")) return 4;
     if (stage.includes("rag")) return 5;
     if (stage.includes("fine")) return 6;
     return null;
@@ -701,13 +715,13 @@ export default function Page() {
             <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Build</h2>
             <button
               onClick={uploadAndBuild}
-              disabled={!files.length || busy === "build"}
+              disabled={!rawText.trim() || busy === "build"}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
                 background: busy === "build" ? "#5b21b6" : "#7c3aed",
                 color: "#fff", fontSize: 13, fontWeight: 500,
                 padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "build" ? "not-allowed" : "pointer",
-                opacity: !files.length && busy !== "build" ? 0.5 : 1,
+                opacity: !rawText.trim() && busy !== "build" ? 0.5 : 1,
               }}
             >
               {busy === "build" ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
@@ -715,51 +729,40 @@ export default function Page() {
             </button>
           </div>
 
-          {/* DROP ZONE */}
-          <div style={{
-            border: "2px dashed #1f1f23", background: "#141416", borderRadius: 8,
-            minHeight: 120, display: "flex", flexDirection: "column", alignItems: "center",
-            justifyContent: "center", padding: 24, cursor: "pointer", position: "relative",
-            marginBottom: 16,
-          }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              setFiles(prev => [...prev, ...Array.from(e.dataTransfer.files || [])]);
-            }}
-          >
-            <label htmlFor="file-input" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-              {files.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
-                  {files.map((file, i) => (
-                    <span key={i} style={{
-                      display: "inline-flex", alignItems: "center", gap: 4,
-                      background: "#1f1f23", padding: "4px 8px", borderRadius: 6, fontSize: 12, color: "#f4f4f5",
-                    }}>
-                      {file.name}
-                      <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }} style={{
-                        background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0, display: "inline-flex",
-                      }}>
-                        <XCircle size={12} />
-                      </button>
-                    </span>
-                  ))}
-                  <span style={{ fontSize: 12, color: "#7c3aed", cursor: "pointer", textDecoration: "underline" }}>Add more</span>
-                </div>
-              ) : (
-                <>
-                  <span style={{ fontSize: 13, color: "#f4f4f5", display: "block", marginBottom: 4 }}>
-                    Drop recorded customer service calls (audio, CSV, JSON, EML, PDF, DOCX)
-                  </span>
-                  <span style={{ fontSize: 11, color: "#71717a" }}>or click to browse</span>
-                </>
+          {/* TRANSCRIPT TEXT INPUT */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#71717a" }}>Paste call transcripts (CALLER: / AGENT: format)</span>
+              {rawText.trim().length > 0 && (
+                <button onClick={() => setRawText("")} style={{
+                  background: "transparent", border: "none", color: "#52525b", cursor: "pointer",
+                  fontSize: 11, display: "inline-flex", alignItems: "center", gap: 4, padding: 0,
+                }}>
+                  <XCircle size={12} /> Clear
+                </button>
               )}
-            </label>
+            </div>
+            <textarea
+              value={rawText}
+              onChange={(e) => setRawText(e.target.value)}
+              placeholder={"=== CALL 1 ===\nCALLER: Hi, I'd like to check my balance.\nAGENT: Of course! Can I verify your identity?\n\n=== CALL 2 ===\n..."}
+              style={{
+                width: "100%", height: 280, background: "#141416",
+                border: rawText.trim() ? "1px solid #3f3f46" : "1px solid #1f1f23",
+                borderRadius: 8, padding: "12px 14px", fontSize: 12,
+                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                color: "#f4f4f5", resize: "vertical", outline: "none",
+                lineHeight: 1.6, boxSizing: "border-box",
+              }}
+              onFocus={(e) => { e.target.style.borderColor = "#7c3aed"; }}
+              onBlur={(e) => { e.target.style.borderColor = rawText.trim() ? "#3f3f46" : "#1f1f23"; }}
+            />
+            {rawText.trim().length > 0 && (
+              <div style={{ fontSize: 10, color: "#52525b", marginTop: 4 }}>
+                {rawText.trim().split("\n").filter(l => l.startsWith("CALLER:") || l.startsWith("AGENT:")).length} turns detected
+              </div>
+            )}
           </div>
-          <input id="file-input" className="sr-only" type="file" multiple accept="audio/*,.txt,.eml,.json,.csv,.pdf,.docx" onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            const incoming = Array.from(e.target.files || []);
-            setFiles((prev) => [...prev, ...incoming]);
-          }} />
 
           {/* PIPELINE STEPPER */}
           <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 20 }}>
@@ -896,7 +899,7 @@ export default function Page() {
                 {Object.entries(transcriptScores.dimension_scores).map(([dim, score]) => {
                   const pct = Math.round((score / 10) * 100);
                   const color = pct >= 70 ? "#22c55e" : pct >= 40 ? "#f59e0b" : "#ef4444";
-                  const label = DIMENSION_LABELS[dim] ?? dim.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                  const label = dim.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
                   return (
                     <div key={dim} style={{ background: "#0c0c0d", border: "1px solid #1f1f23", borderRadius: 6, padding: "8px 10px" }}>
                       <div style={{ fontSize: 10, color: "#71717a", marginBottom: 4 }}>{label}</div>
@@ -915,18 +918,16 @@ export default function Page() {
         {/* SECTION 2: AGENT */}
         <section id="agent" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <div>
-              <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Agent</h2>
-              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>Loan officer agent — trained on your calls</div>
-            </div>
+            <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Agent</h2>
             <button
               onClick={callAgent}
-              disabled={busy === "call"}
+              disabled={busy === "call" || !agentReady}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
-                background: "#16a34a", color: "#fff", fontSize: 13, fontWeight: 500,
-                padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "call" ? "not-allowed" : "pointer",
-                opacity: busy === "call" ? 0.6 : 1,
+                background: agentReady ? "#16a34a" : "#3f3f46", color: "#fff", fontSize: 13, fontWeight: 500,
+                padding: "8px 16px", borderRadius: 6, border: "none",
+                cursor: busy === "call" || !agentReady ? "not-allowed" : "pointer",
+                opacity: busy === "call" || !agentReady ? 0.6 : 1,
               }}
             >
               {busy === "call" ? <Loader2 size={14} className="animate-spin" /> : <Phone size={14} />}
@@ -962,19 +963,7 @@ export default function Page() {
           </div>
           {/* CHAT WIDGET */}
           <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: "#71717a" }}>Live chat test &mdash; real NVIDIA NIM response</div>
-              {nimMode && (
-                <span style={{
-                  fontSize: 10, fontWeight: 500, padding: "2px 8px", borderRadius: 4,
-                  background: nimMode === "self_hosted" ? "#052e16" : "#1c1917",
-                  color: nimMode === "self_hosted" ? "#22c55e" : "#f59e0b",
-                  border: `1px solid ${nimMode === "self_hosted" ? "#166534" : "#78350f"}`,
-                }}>
-                  NIM: {nimMode === "self_hosted" ? "Self-hosted" : "Cloud"}
-                </span>
-              )}
-            </div>
+            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 12 }}>Live chat test &mdash; real NVIDIA NIM response</div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <input
                 value={chatMessage}
@@ -982,7 +971,7 @@ export default function Page() {
                 onKeyDown={(e) => { if (e.key === "Enter") sendChat(); }}
                 onFocus={() => setChatFocused(true)}
                 onBlur={() => setChatFocused(false)}
-                placeholder="Ask about loan rates, requirements..."
+                placeholder="Type a message..."
                 style={{
                   flex: 1, background: "#0c0c0d", border: chatFocused ? "1px solid #7c3aed" : "1px solid #1f1f23", borderRadius: 4,
                   padding: "8px 12px", fontSize: 13, color: "#f4f4f5", outline: "none",
@@ -1056,14 +1045,14 @@ export default function Page() {
               </button>
               <button
                 onClick={launchAttack}
-                disabled={busy === "attack"}
+                disabled={busy === "attack" || !agentReady}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 6,
-                  background: busy === "attack" ? "#5b21b6" : "#7c3aed",
+                  background: busy === "attack" || !agentReady ? "#3f3f46" : "#7c3aed",
                   color: "#fff", fontSize: 13, fontWeight: 500,
                   padding: "8px 16px", borderRadius: 6, border: "none",
-                  cursor: busy === "attack" ? "not-allowed" : "pointer",
-                  opacity: busy === "attack" ? 0.6 : 1,
+                  cursor: busy === "attack" || !agentReady ? "not-allowed" : "pointer",
+                  opacity: busy === "attack" || !agentReady ? 0.6 : 1,
                 }}
               >
                 {busy === "attack" ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
@@ -1424,7 +1413,13 @@ function VanguardGrid({
   onToggleSession: (id: string) => void;
 }) {
   // Build ordered slots: prefer suite order, fall back to live sessions order
-  const sessionMap = new Map(sessions.map((s) => [s.session_id, s]));
+  // Index by both session_id AND attack_definition_id so pre-fetched suite items
+  // (with old session_ids) match live results (which get new session_ids via _fresh_session).
+  const sessionMap = new Map<string, VanguardSession>();
+  sessions.forEach((s) => {
+    sessionMap.set(s.session_id, s);
+    if (s.attack_definition_id) sessionMap.set(s.attack_definition_id, s);
+  });
 
   type Slot = { personaName: string; session: VanguardSession | null; key: string };
   let slots: Slot[];

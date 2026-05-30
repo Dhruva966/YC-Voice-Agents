@@ -2,6 +2,10 @@
 
 ## Quick Start (Local, No AWS)
 
+This mode stores files locally, but it still calls Gemini, NVIDIA, Daily, Twilio,
+and optionally Cekura. Do not upload real borrower/healthcare PII unless a
+redaction/private-provider path is in place.
+
 ```bash
 cd forge
 cp .env.example .env
@@ -21,7 +25,7 @@ cd frontend && npm install && npm run dev
 # Expose for Twilio webhook. Twilio Media Streams require a wss URL, so use
 # an HTTPS tunnel or TLS-terminating proxy.
 ngrok http 8000
-# → Set Twilio webhook: https://<ngrok-url>/webhook/twilio/inbound
+# → Set Twilio webhook: https://<ngrok-url>/users/demo/webhook/twilio/inbound
 ```
 
 ---
@@ -35,7 +39,8 @@ ngrok http 8000
 | `NVIDIA_API_KEY` | build.nvidia.com → API Key |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` |
 | `NVIDIA_BASE_MODEL` | `meta/llama-4-maverick-17b-128e-instruct` |
-| `NVIDIA_EMBEDDING_MODEL` | `nvidia/llama-3.2-nv-embedqa-1b-v2` |
+| `NVIDIA_EMBEDDING_MODEL` | `nvidia/llama-nemotron-embed-1b-v2` |
+| `NVIDIA_EMBEDDING_DIMENSIONS` | `1024` |
 | `DAILY_API_KEY` | dashboard.daily.co → Developers → API Key |
 | `TWILIO_ACCOUNT_SID` | console.twilio.com → Account Info |
 | `TWILIO_AUTH_TOKEN` | console.twilio.com → Account Info |
@@ -53,12 +58,13 @@ ngrok http 8000
 | `TRANSCRIPT_SCORE_TOP_K` | `50` | Segments selected per scoring dimension |
 | `PERSONA_AGENT_URL` | `http://localhost:8000` | Where Vanguard finds the persona API. Use `http://backend:8000` for Docker |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS allowlist for the frontend |
+| `FINETUNE_MAX_WAIT_SECONDS` | `3600` | Max customization polling time before fallback |
 
 ### Optional
 | Variable | When needed |
 |----------|-------------|
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs |
-| `NVIDIA_PERSONA_MODEL` | After fine-tune: adapter ID to swap in |
+| `NVIDIA_PERSONA_MODEL` | Adapter ID saved/displayed after fine-tune; Gemini Live does not load it |
 | `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override behind TLS/proxy |
 | `CEKURA_API_KEY` | Cekura evaluator; NVIDIA NIM fallback is used when unset |
 | `CEKURA_BASE_URL` | Cekura endpoint URL; optional with NVIDIA NIM fallback |
@@ -99,7 +105,7 @@ ngrok http 8000
 N × Daily Rooms ──► persona bot + attacker bot ──► Cekura evaluation
                                                          │
                                                autoloop/loop_controller.py
-                                               NVIDIA NIM LoRA fine-tune
+                                               NVIDIA NIM LoRA fine-tune path
 
 [Frontend: 3000] ──► API polling ──► FastAPI: 8000
 ```
@@ -113,7 +119,7 @@ N × Daily Rooms ──► persona bot + attacker bot ──► Cekura evaluatio
 3. Twilio Console → Phone Numbers → Manage → Active Numbers → your number
 4. Voice Configuration:
    - **A call comes in:** Webhook
-   - **URL:** `https://<ngrok-url>/webhook/twilio/inbound`
+   - **URL:** `https://<ngrok-url>/users/demo/webhook/twilio/inbound`
    - **HTTP Method:** POST
 5. Save. Call the number to test.
 
@@ -143,6 +149,10 @@ nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 &
 
 Note: Twilio `<Stream>` establishes a `wss` WebSocket connection, and Twilio documents `wss` as the only supported protocol. For EC2 demos, put Caddy, nginx, an ALB, or ngrok in front of uvicorn instead of pointing Twilio at plain HTTP.
 
+Do not expose an EC2/ngrok demo to untrusted users without an auth layer. The
+current demo validates `user_id` shape but does not authenticate tenant access,
+and public endpoints can trigger paid provider calls.
+
 ---
 
 ## Docker Compose (optional)
@@ -158,42 +168,6 @@ docker-compose up --build
 When using docker-compose: set `PERSONA_AGENT_URL=http://backend:8000` in `.env`.
 The checked-in `.env.example` includes local pgvector defaults so Compose has
 Postgres credentials before you add production RDS settings.
-
----
-
-## Partner Hand-Off (NVIDIA GPU Infra)
-
-When your NVIDIA infrastructure partner delivers the self-hosted NIM server, update `forge/.env`:
-
-```env
-# Replace cloud NIM with self-hosted EC2 NIM
-NVIDIA_BASE_URL=http://<partner-ec2-ip>:8000/v1
-NVIDIA_BASE_MODEL=meta/llama-3.1-70b-instruct
-NVIDIA_CUSTOMIZATION_BASE_URL=http://<partner-ec2-ip>:8001
-
-# After first fine-tune run, partner will provide:
-NVIDIA_PERSONA_MODEL=meta/llama-3.1-70b-instruct@forge-persona
-```
-
-**Validate the switch worked:**
-```bash
-# 1. Check which NIM is active
-curl http://localhost:8000/health/nim
-# → "nim_mode": "self_hosted"
-
-# 2. Run NIM inference test
-cd forge && make test-nim
-# → NIM OK: ...
-
-# 3. Run embedding test
-cd forge && make test-embed
-# → Embedding dim: 1024
-
-# 4. Full env check
-cd forge && make check-env
-```
-
-No code changes needed — all NVIDIA clients read from env vars.
 
 ---
 
@@ -234,13 +208,13 @@ cp -r local_data/ local_data_backup/
 
 ## Demo Video Flow
 
-1. **Skit** (~30s): Funny example banking call — caller asks about a loan application, agent stumbles
+1. **Skit** (~30s): Funny example sales call — one person plays customer, one plays agent
 2. **Fast-forward** (~15s): Grid of 100 simultaneous calls playing at once
-3. **Transcript dump** (~20s): Upload recorded customer service calls into the Forge dashboard
+3. **Transcript dump** (~20s): Drag all transcripts into the Forge dashboard
 4. **Build pipeline** (~30s): Watch the stepper light up — Extract → Score (show quality scores per transcript) → RAG → Fine-tune
-5. **Live call** (~45s): Call the Twilio number live on camera — talk to the trained loan officer agent
+5. **Live call** (~45s): Call the Twilio number live on camera — talk to the trained agent
 6. **Vanguard** (~15s): Brief clip of adversarial sessions running + resilience score
-7. **Close** (~10s): Show the webhook URL — "Paste this webhook URL into your bank's call routing. Done."
+7. **Close** (~10s): Show the webhook URL — "Paste this. Done."
 
 ---
 
@@ -254,6 +228,6 @@ cp -r local_data/ local_data_backup/
 | Twilio doesn't connect | ngrok URL not in Twilio console | Re-run ngrok, update webhook URL |
 | Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong, server down, or Gemini/Daily key issue | Confirm `http://localhost:8000`, server health, `GEMINI_API_KEY`, and `DAILY_API_KEY` |
 | Cekura scores all 0 | Cekura unreachable | Expected — `"provider": "llm_fallback"` still works |
-| Build hangs at fine-tune | `NVIDIA_CUSTOMIZATION_BASE_URL` not set | Fine-tune logs error, falls back to base model — build still completes |
+| Build hangs at fine-tune | Customization job stays pending | `FINETUNE_MAX_WAIT_SECONDS` bounds polling; build falls back to the Gemini Live base runtime |
 | Transcript scorer times out | NVIDIA NIM rate limit | Reduce batch size or add retry in `transcript_scorer.py` |
 | Frontend shows stale data | Dashboard poll interval (30s) | Click Refresh or wait |

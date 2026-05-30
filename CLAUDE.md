@@ -1,17 +1,20 @@
 # Forge
 
 ## What This Is
-Forge turns bulk sales call transcripts into production-ready voice agents. Companies upload their calls — Forge scores, curates, fine-tunes, and delivers a Twilio webhook URL. Paste it in. Done.
+Forge turns bulk call transcripts into a pre-production safety gate for voice agents. Companies upload redacted calls — Forge scores, curates, builds a RAG-backed Gemini Live agent, red-teams it, and reports readiness before deployment.
 
-The pitch: every other team built a voice agent. Forge builds the infrastructure that makes voice agents production-ready, continuously improving, and verifiably robust before they ship.
+The pitch: every other team built a voice agent. Forge builds the infrastructure that makes voice agents measurable, adversarially tested, and harder to ship on vibes.
+
+Current boundary: the live runtime is Gemini Live with prompts/RAG. NVIDIA LoRA fine-tune jobs can be prepared/submitted and an adapter ID can be saved, but Gemini Live does not load that adapter today.
 
 ## Tech Stack
 | Layer | Technology |
 |-------|-----------|
 | Voice pipeline | Pipecat + Gemini 3.1 Flash Live (STT + LLM + TTS, audio-to-audio) |
-| Transport | Daily (WebRTC for all calls — browser + Vanguard sessions) |
-| Fine-tuning | NVIDIA NIM LoRA Customization API |
-| RAG embeddings | NVIDIA NIM (`nvidia/llama-3.2-nv-embedqa-1b-v2`) |
+| Telephony | Twilio (WebSocket media stream) |
+| Transport | Daily (WebRTC for Daily room calls + Vanguard sessions) |
+| Fine-tuning | NVIDIA NIM LoRA Customization API path; adapter saved/displayed, not loaded by Gemini Live runtime |
+| RAG embeddings | NVIDIA NIM (`nvidia/llama-nemotron-embed-1b-v2`) |
 | Transcript scoring | NVIDIA NIM (`meta/llama-4-maverick-17b-128e-instruct`) |
 | Evaluation | Cekura (LLM fallback: NVIDIA NIM) |
 | Vector DB | ChromaDB (local) / pgvector (prod) |
@@ -55,7 +58,7 @@ forge/
 │   └── app/page.tsx         ← Dashboard: Build / Agent / Vanguard / Improvement
 ├── storage.py               ← S3 shim: USE_LOCAL_STORAGE=true → ./local_data/
 └── prompts.py               ← ALL prompts: persona_system, transcript_quality_score,
-                                ATTACKER_PERSONAS (8), eval rubrics, finetune formatters
+                                ATTACKER_PERSONAS (10), eval rubrics, finetune formatters
 ```
 
 ## Agent Capability Routing
@@ -74,6 +77,8 @@ Escalate only when the current tier shows a clear reasoning gap, the blast radiu
 |------|-------|
 | FastAPI app | `forge/api/main.py:app` |
 | Pipecat voice pipeline (Daily) | `forge/pipeline/persona_bot.py:run_persona_bot()` |
+| Twilio inbound webhook | `forge/api/main.py:POST /users/{user_id}/webhook/twilio/inbound` (`/webhook/twilio/inbound` remains demo-only) |
+| Twilio media stream (Gemini Live) | `forge/api/main.py:WS /media-stream` |
 | Daily room call | `forge/api/main.py:POST /users/{user_id}/call` |
 | Build pipeline | `forge/api/main.py:POST /users/{user_id}/build` -> `_run_build()` |
 | Transcript scoring | `forge/ingestion/transcript_scorer.py:score_transcripts()` |
@@ -109,16 +114,14 @@ Keys: `turns[]`, `top_k_turns[]` (selected), `aggregate_score`, `dimension_score
 Keys: `run_id`, `total`, `passed`, `failed`, `pass_rate`, `duration_seconds`, `sessions[]`
 
 **Attack suite:** `./local_data/{user_id}/attack_suite.json`
-Array of `{session_id, attack_persona, status}` — grows after each improvement cycle.
+Array of attack definitions. Stored `session_id` values are definition IDs only; `run_vanguard()` creates fresh per-run session IDs.
 
 ## Security Non-Negotiables
-1. No API keys in code — env vars only; every key documented in `.env.example`; `.env.example` must contain only empty placeholders
-2. `user_id` path param is untrusted — `_validate_user_id()` in `api/main.py` enforces `^[a-zA-Z0-9_-]{1,64}$`; `storage.py` enforces path traversal protection
-3. Transcript data is PII — `local_data/` is gitignored; never commit audio or transcript content
-5. No unguarded endpoints — all `/users/{user_id}/*` write routes call `_validate_user_id(user_id)` before processing
-6. Live Vanguard results in `_vanguard_live` are keyed by `"{user_id}:{run_id}"` — never look up by `run_id` alone
-7. Uploaded filenames are sanitized via `_safe_filename()` in `ingestion/pipeline.py` before use in S3 keys
-8. Daily rooms for Vanguard must NOT have `enable_recording: "cloud"` — that incurs unbounded billing
+1. No API keys in code — env vars only; every key documented in `.env.example`
+2. `user_id` path param is untrusted — API routes validate a restricted ID format and `storage.py` blocks path traversal
+3. Twilio webhook must validate `X-Twilio-Signature` before production traffic
+4. Transcript data is PII — `local_data/` is gitignored; never commit audio or transcript content
+5. No unguarded endpoints — all `/users/{user_id}/*` routes must validate user context before prod
 
 ## Testing Standard
 - Regression test every modified domain (ingestion, scoring, pipeline, vanguard)
@@ -194,20 +197,24 @@ Treat this as a workflow map. Use slash commands only in tools that support them
 | `NVIDIA_BASE_URL` | ✅ | `https://integrate.api.nvidia.com/v1` |
 | `NVIDIA_BASE_MODEL` | ✅ | `meta/llama-4-maverick-17b-128e-instruct` |
 | `NVIDIA_EMBEDDING_MODEL` | ✅ | `nvidia/llama-nemotron-embed-1b-v2` |
+| `NVIDIA_EMBEDDING_DIMENSIONS` | optional | Embedding vector size requested from NVIDIA (default: `1024`) |
 | `DAILY_API_KEY` | ✅ | Daily room creation (Vanguard + browser calls) |
+| `TWILIO_ACCOUNT_SID` | ✅ | Twilio telephony |
+| `TWILIO_AUTH_TOKEN` | ✅ | Twilio auth |
+| `TWILIO_PHONE_NUMBER` | ✅ | Inbound phone number |
 | `CEKURA_API_KEY` | optional | Cekura evaluation; NVIDIA NIM fallback when unset |
 | `CEKURA_BASE_URL` | optional | `https://api.cekura.ai` |
 | `ALLOWED_ORIGINS` | optional | Comma-separated CORS allowlist (default: `http://localhost:3000`) |
 | `USE_LOCAL_STORAGE` | optional | `true` (default) → `./local_data/`; `false` → AWS S3 |
 | `USE_LOCAL_RAG` | optional | `true` (default) → ChromaDB; `false` → pgvector/RDS |
 | `TRANSCRIPT_SCORE_TOP_K` | optional | Top segments per scoring dimension (default: `50`) |
+| `FINETUNE_MAX_WAIT_SECONDS` | optional | Max customization polling time before fallback (default: `3600`) |
 | `AWS_S3_BUCKET` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `AWS_SECRET_ACCESS_KEY` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `AWS_REGION` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | optional | LoRA fine-tune job submission endpoint |
-| `NVIDIA_PERSONA_MODEL` | optional | Adapter ID after fine-tune completes |
-| `FINETUNE_POLL_TIMEOUT_SECONDS` | optional | Max wait for fine-tune job (default: `14400` = 4 hours) |
+| `NVIDIA_PERSONA_MODEL` | optional | Adapter ID after fine-tune completes; Gemini Live does not load it |
 | `PERSONA_AGENT_URL` | optional | `http://localhost:8000` local / `http://backend:8000` docker |
 | `HUGGINGFACE_TOKEN` | optional | Better pyannote diarization (fallback works without it) |
 
@@ -231,21 +238,3 @@ Key routing rules:
 - Author a backlog-ready spec/issue -> concise spec with acceptance criteria
 
 Agent-specific adapter files should stay thin and point back here instead of duplicating this policy.
-
-## Skill routing
-
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
-
-Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
