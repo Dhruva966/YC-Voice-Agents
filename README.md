@@ -17,7 +17,7 @@ Forge is the safety gate before a lending voice agent talks to real customers:
 3. **Score** borrower/agent turns using NVIDIA NIM to curate high-quality training examples
 4. **Build** a RAG-backed Gemini Live voice agent reachable through Twilio or Daily
 5. **Red-team** it with Vanguard: adversarial borrower, fraud, privacy, and compliance scenarios in concurrent Daily rooms
-6. **Evaluate** the failures with Cekura, falling back to NVIDIA NIM when Cekura is unavailable
+6. **Evaluate** the failures with NVIDIA NIM rubrics while posting call logs to Cekura observability when configured
 7. **Improve** by feeding failures into fine-tuning, regression testing, and harder future attacks
 
 **The pitch:** banks should not ship lending voice agents on vibes. Forge turns messy historical calls into a tested, adversarially hardened voice agent with a measurable readiness score.
@@ -47,7 +47,7 @@ flowchart LR
     H -. adapter saved,\nnot loaded by Gemini Live today .-> G
     G -->|Twilio Webhook| I[Bank Phone Number\nPSTN]
     G --> J[Vanguard\nborrower fraud + compliance attacks\nDaily rooms]
-    J -->|Cekura / NIM scores| K[Auto-Improvement Loop\nfailures → finetune → harder tests]
+    J -->|NIM scores + optional Cekura logs| K[Auto-Improvement Loop\nfailures → finetune → harder tests]
     K --> H
 ```
 
@@ -57,7 +57,7 @@ flowchart LR
 |-----------|-------------|
 | **Build Pipeline** | Ingest lending calls → extract persona/policy context → score safe examples → RAG → fine-tune path |
 | **Lending Agent** | Gemini 3.1 Flash Live voice pipeline via Twilio (PSTN) or Daily (WebRTC) |
-| **Vanguard** | Borrower fraud, privacy, hallucination, and compliance attacks → Cekura/NIM evaluation → auto-improvement |
+| **Vanguard** | Borrower fraud, privacy, hallucination, and compliance attacks → NIM rubric evaluation + optional Cekura observability → auto-improvement |
 
 ---
 
@@ -70,7 +70,7 @@ flowchart LR
 | Transcripts per build | 50–100 |
 | Scoring dimensions | 5 |
 | Attacker personas | 10 |
-| Attack sessions per run | 14 default / 17 seeded demo |
+| Attack sessions per run | 9 default / 17 seeded demo |
 | Seeded baseline pass rate | ~46–55% illustrative |
 | Seeded after 2 improvement cycles | ~80%+ illustrative |
 | Voice latency (Gemini Live) | ~50–80ms (STT + LLM + TTS in one model) |
@@ -88,7 +88,7 @@ flowchart LR
 | Personality extraction | NVIDIA NIM |
 | RAG embeddings | NVIDIA NIM — `nvidia/llama-nemotron-embed-1b-v2` |
 | Fine-tuning | NVIDIA NIM LoRA Customization API path; adapter saved/displayed, Gemini Live runtime remains prompt/RAG-backed |
-| Evaluation | Cekura (LLM fallback: NVIDIA NIM) |
+| Evaluation | NVIDIA NIM rubric judge; optional Cekura observability call logs |
 | Vector DB | ChromaDB (local) / pgvector (prod) |
 | Storage | `storage.py` shim — `./local_data/` (local) or AWS S3 (prod) |
 | Audio transcription | faster-whisper (local, `base` default; `large-v3` optional) |
@@ -108,7 +108,7 @@ flowchart LR
 | **Daily** | WebRTC transport for browser calls and parallel Vanguard red-team rooms |
 | **Pipecat** | Realtime voice pipeline framework for persona and attacker bots |
 | **Twilio** | Real PSTN phone deployment path for the lending agent |
-| **Cekura** | Automated evaluation of privacy, compliance, hallucination, and robustness failures |
+| **Cekura** | Observability dashboard for Vanguard call logs when `CEKURA_API_KEY` and `CEKURA_AGENT_ID` are configured |
 | **AWS** | Optional production compute/storage path: EC2 for hosting, S3 for data, RDS/pgvector for production retrieval |
 
 ---
@@ -211,8 +211,12 @@ ngrok http 8000
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs to NVIDIA |
 | `NVIDIA_PERSONA_MODEL` | Optional adapter ID saved/displayed after fine-tune; Gemini Live does not load it |
 | `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override when running behind TLS/proxy |
-| `CEKURA_API_KEY` | Cekura evaluator; NVIDIA NIM fallback is used when unset |
-| `CEKURA_BASE_URL` | Cekura endpoint URL; optional with NVIDIA NIM fallback |
+| `MEDIA_STREAM_SECRET` | Optional HMAC secret for Twilio media-stream URLs; defaults to `TWILIO_AUTH_TOKEN` when unset |
+| `FORGE_API_KEY` | Optional shared backend API key for demos; real production auth still needs tenant identity and authorization |
+| `NEXT_PUBLIC_FORGE_API_KEY` | Optional browser-visible copy of `FORGE_API_KEY` for demo deployments only; not a security boundary |
+| `CEKURA_API_KEY` | Optional Cekura observability API key; NIM still drives pass/fail scoring |
+| `CEKURA_AGENT_ID` | Required with `CEKURA_API_KEY` to attach observed calls to a Cekura agent |
+| `CEKURA_BASE_URL` | Cekura endpoint URL; default is usually `https://api.cekura.ai` |
 | `ELEVENLABS_API_KEY` | Legacy voice clone helper only; not needed for current runtime |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |
@@ -369,13 +373,13 @@ POST /users/{id}/build
 ```
 POST /users/{id}/vanguard/run
   → run_vanguard() [background asyncio.run in a thread]
-    For each attack definition in attack_suite (14 by default):
+    For each attack definition in attack_suite (9 by default):
       → Generate a fresh per-run session_id
       → Create Daily room (per session, fresh)
       → POST /join_room → persona bot joins room
       → run_attacker_bot() → adversarial borrower/fraud caller joins same room, speaks first
       → Transcript collected via on_user_turn_stopped / on_assistant_turn_stopped events
-      → evaluate_transcript() → Cekura API or NVIDIA fallback → scores + pass/fail
+      → evaluate_transcript() → optional Cekura observe post + NVIDIA NIM rubric scores/pass-fail
     → Aggregate → save to {user_id}/vanguard_runs/{run_id}.json
     → Live results streamed to frontend via _vanguard_live[run_id] dict
 ```
@@ -420,7 +424,7 @@ All prompts live in `forge/prompts.py:ATTACKER_PERSONAS`.
 | `contradiction_trapper` | Force self-contradiction | Does agent accept false prior statements about eligibility? |
 | `degraded_audio` | Poor audio robustness | Does agent proceed on misheard PII instead of clarifying? |
 
-Default attack suite = 10 personas × 1 + first 4 repeated = **14 sessions** per run. Stored attack definitions are reused, but each run now receives fresh session IDs.
+Default attack suite = **9 sessions** per run: the first 9 personas in `ATTACKER_PERSONAS`, one session each, to keep Daily room count manageable on demo hardware. Stored attack definitions are reused, but each run now receives fresh session IDs.
 
 ---
 
@@ -459,8 +463,8 @@ forge/
 ├── pipeline/
 │   ├── persona_bot.py       ← Pipecat + Gemini Live persona pipeline
 │   └── attacker_bot.py      ← Attacker pipeline for Vanguard sessions
-├── vanguard/orchestrator.py ← Concurrent attack sessions + Cekura scoring
-├── cekura/evaluator.py      ← Cekura first; NVIDIA NIM 3-rubric fallback
+├── vanguard/orchestrator.py ← Concurrent attack sessions + NIM/Cekura evaluation pipeline
+├── cekura/evaluator.py      ← Cekura observability + NVIDIA NIM 4-rubric scoring
 ├── autoloop/loop_controller.py ← failure annotation → fine-tune → regression gate
 ├── ingestion/
 │   ├── pipeline.py          ← ingest_file() entry point; routes by file type
@@ -596,7 +600,7 @@ cp -r local_data/ local_data_backup/
 3. **Build pipeline** (~30s) — Forge extracts the loan-officer persona, scores safe borrower/agent turns, builds RAG, and prepares the fine-tune path.
 4. **Live call** (~45s) — call the Twilio number or open the Daily room and talk to the lending agent.
 5. **Vanguard** (~45s) — adversarial borrowers try spouse fraud, fake authority, jailbreaks, bad audio, and hallucinated-rate traps.
-6. **Evaluation** (~30s) — show Cekura/NIM scores, failed sessions, and clearly label whether the improvement curve is live-run evidence or seeded demo state.
+6. **Evaluation** (~30s) — show NVIDIA NIM rubric scores, optional Cekura call-log links, failed sessions, and clearly label whether the improvement curve is live-run evidence or seeded demo state.
 7. **Close** (~10s) — "Forge is the pre-production safety gate for lending voice agents."
 
 ---
@@ -610,7 +614,7 @@ cp -r local_data/ local_data_backup/
 | Gemini Live fails mid-call | Bad API key or rate limit | Verify at [aistudio.google.com](https://aistudio.google.com), check quota |
 | Twilio doesn't connect | Stale ngrok URL in Twilio console | Re-run ngrok, update webhook URL in Twilio |
 | Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong, server down, or Gemini/Daily key issue | Confirm `http://localhost:8000`, server health, `GEMINI_API_KEY`, and `DAILY_API_KEY` |
-| Cekura scores all 0 | Cekura unreachable | Expected — `"provider": "llm_fallback"` still works, scores populate |
+| No Cekura links | Cekura unreachable or not configured | Expected — `"provider": "nvidia_nim"` still drives scores/pass-fail |
 | Build hangs at fine-tune | Customization job stays pending | `FINETUNE_MAX_WAIT_SECONDS` bounds polling; build falls back to the Gemini Live base runtime |
 | Transcript scorer times out | NVIDIA NIM rate limit | Reduce `TRANSCRIPT_SCORE_TOP_K` (e.g., `20`) or add retry |
 | Frontend shows stale data | 30s poll interval | Click Refresh or wait |

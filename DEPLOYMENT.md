@@ -66,8 +66,12 @@ ngrok http 8000
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs |
 | `NVIDIA_PERSONA_MODEL` | Adapter ID saved/displayed after fine-tune; Gemini Live does not load it |
 | `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override behind TLS/proxy |
-| `CEKURA_API_KEY` | Cekura evaluator; NVIDIA NIM fallback is used when unset |
-| `CEKURA_BASE_URL` | Cekura endpoint URL; optional with NVIDIA NIM fallback |
+| `MEDIA_STREAM_SECRET` | Optional HMAC secret for media-stream URLs; defaults to `TWILIO_AUTH_TOKEN` |
+| `FORGE_API_KEY` | Optional shared API key for demo backends; not a replacement for tenant auth |
+| `NEXT_PUBLIC_FORGE_API_KEY` | Browser-visible demo copy of `FORGE_API_KEY`; do not treat as secret |
+| `CEKURA_API_KEY` | Optional Cekura observability API key; NVIDIA NIM drives pass/fail scoring |
+| `CEKURA_AGENT_ID` | Required with `CEKURA_API_KEY` to attach observed calls to a Cekura agent |
+| `CEKURA_BASE_URL` | Cekura endpoint URL; usually `https://api.cekura.ai` |
 | `ELEVENLABS_API_KEY` | Legacy voice clone helper only; not needed for current runtime |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |
@@ -227,7 +231,7 @@ cp -r local_data/ local_data_backup/
 | Gemini Live fails | `GEMINI_API_KEY` wrong or rate-limited | Verify key at aistudio.google.com, check quota |
 | Twilio doesn't connect | ngrok URL not in Twilio console | Re-run ngrok, update webhook URL |
 | Vanguard sessions all fail | `PERSONA_AGENT_URL` wrong, server down, or Gemini/Daily key issue | Confirm `http://localhost:8000`, server health, `GEMINI_API_KEY`, and `DAILY_API_KEY` |
-| Cekura scores all 0 | Cekura unreachable | Expected — `"provider": "llm_fallback"` still works |
+| No Cekura links | Cekura unreachable or not configured | Expected — `"provider": "nvidia_nim"` still drives scores/pass-fail |
 | Build hangs at fine-tune | Customization job stays pending | `FINETUNE_MAX_WAIT_SECONDS` bounds polling; build falls back to the Gemini Live base runtime |
 | Transcript scorer times out | NVIDIA NIM rate limit | Reduce batch size or add retry in `transcript_scorer.py` |
 | Frontend shows stale data | Dashboard poll interval (30s) | Click Refresh or wait |

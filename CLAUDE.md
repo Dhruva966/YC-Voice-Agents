@@ -16,7 +16,7 @@ Current boundary: the live runtime is Gemini Live with prompts/RAG. NVIDIA LoRA 
 | Fine-tuning | NVIDIA NIM LoRA Customization API path; adapter saved/displayed, not loaded by Gemini Live runtime |
 | RAG embeddings | NVIDIA NIM (`nvidia/llama-nemotron-embed-1b-v2`) |
 | Transcript scoring | NVIDIA NIM (`meta/llama-4-maverick-17b-128e-instruct`) |
-| Evaluation | Cekura (LLM fallback: NVIDIA NIM) |
+| Evaluation | NVIDIA NIM rubric judge; optional Cekura observability call logs |
 | Vector DB | ChromaDB (local) / pgvector (prod) |
 | Storage | `storage.py` shim → `./local_data/` (local) or AWS S3 (prod) |
 | Compute | AWS EC2 |
@@ -35,9 +35,9 @@ forge/
 │   ├── persona_bot.py       ← Pipecat + Gemini Live pipeline (Daily + Twilio transport)
 │   └── attacker_bot.py      ← Attacker Pipecat pipeline for Vanguard sessions
 ├── vanguard/
-│   └── orchestrator.py      ← Concurrent attack sessions, Cekura scoring, S3 persist
+│   └── orchestrator.py      ← Concurrent attack sessions, NIM/Cekura evaluation, S3 persist
 ├── cekura/
-│   └── evaluator.py         ← Cekura first; NVIDIA NIM fallback (3 parallel rubric calls)
+│   └── evaluator.py         ← Cekura observability + NVIDIA NIM 4-rubric scoring
 ├── autoloop/
 │   └── loop_controller.py   ← Failure annotation → fine-tune → regression gate → harder variants
 ├── ingestion/
@@ -202,7 +202,8 @@ Treat this as a workflow map. Use slash commands only in tools that support them
 | `TWILIO_ACCOUNT_SID` | ✅ | Twilio telephony |
 | `TWILIO_AUTH_TOKEN` | ✅ | Twilio auth |
 | `TWILIO_PHONE_NUMBER` | ✅ | Inbound phone number |
-| `CEKURA_API_KEY` | optional | Cekura evaluation; NVIDIA NIM fallback when unset |
+| `CEKURA_API_KEY` | optional | Cekura observability; NVIDIA NIM still drives pass/fail scoring |
+| `CEKURA_AGENT_ID` | optional | Cekura agent ID required with `CEKURA_API_KEY` to post Vanguard call logs |
 | `CEKURA_BASE_URL` | optional | `https://api.cekura.ai` |
 | `ALLOWED_ORIGINS` | optional | Comma-separated CORS allowlist (default: `http://localhost:3000`) |
 | `USE_LOCAL_STORAGE` | optional | `true` (default) → `./local_data/`; `false` → AWS S3 |

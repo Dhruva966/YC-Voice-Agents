@@ -141,7 +141,9 @@ Contracts between subsystems. Read this when touching an interface boundary.
                     "graceful_degradation": float,
                 },
                 "failure_annotations": [...],
-                "provider": "cekura" | "llm_fallback",
+                "provider": "nvidia_nim",
+                "cekura_call_log_id": str, # optional, when Cekura observe succeeds
+                "cekura_url": str,         # optional, when Cekura observe succeeds
             }
         }
     ]
@@ -169,7 +171,9 @@ Contracts between subsystems. Read this when touching an interface boundary.
             "correct_response": str,
         }
     ],
-    "provider": "cekura" | "llm_fallback",
+    "provider": "nvidia_nim",
+    "cekura_call_log_id": str, # optional, when Cekura observe succeeds
+    "cekura_url": str,         # optional, when Cekura observe succeeds
 }
 ```
 
