@@ -100,7 +100,7 @@ def run_attacker_bot(
     )
 
     context = LLMContext()
-    context_aggregator = LLMContextAggregatorPair(context, realtime_service_mode=True)
+    context_aggregator = LLMContextAggregatorPair(context)
     user_aggregator = context_aggregator.user()
     assistant_aggregator = context_aggregator.assistant()
 

@@ -69,7 +69,7 @@ class DynamicPersonaContext:
         from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
         self._context = LLMContext()
-        self._aggregator = LLMContextAggregatorPair(self._context, realtime_service_mode=True)
+        self._aggregator = LLMContextAggregatorPair(self._context)
         self._context.add_message({"role": "system", "content": initial_system_prompt})
 
     def user(self):
@@ -144,7 +144,7 @@ def run_persona_bot(
     )
 
     context = LLMContext()
-    context_aggregator = LLMContextAggregatorPair(context, realtime_service_mode=True)
+    context_aggregator = LLMContextAggregatorPair(context)
 
     class _DynamicPersonaUpdater(FrameProcessor):
         """Re-injects RAG context into the system prompt on each user turn."""
