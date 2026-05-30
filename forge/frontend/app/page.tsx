@@ -89,6 +89,8 @@ type Evaluation = {
   dimension_scores?:    DimensionScores;
   failure_annotations?: Array<Record<string, unknown>>;
   provider?:            string;
+  cekura_run_id?:       string;
+  cekura_scenario_id?:  string;
 };
 type TranscriptTurn = { role: string; text: string };
 type VanguardSession = {
@@ -528,8 +530,24 @@ function VanguardCard({
                   <ScorePill label="Factual"     value={session.evaluation.dimension_scores.factual_accuracy} />
                   <ScorePill label="Degrade"     value={session.evaluation.dimension_scores.graceful_degradation} />
                   {session.evaluation.provider && (
-                    <span style={{ fontSize: 10, color: "var(--ink-3)", display: "flex", alignItems: "center", fontFamily: "var(--font-mono)" }}>
+                    <span style={{ fontSize: 10, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)" }}>
                       via {session.evaluation.provider}
+                      {session.evaluation.cekura_run_id && (
+                        <a
+                          href={`https://dashboard.cekura.ai/call-logs/${session.evaluation.cekura_run_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            fontSize: 10, padding: "1px 6px",
+                            background: "rgba(99,102,241,0.12)", color: "#818cf8",
+                            borderRadius: 4, border: "1px solid rgba(99,102,241,0.3)",
+                            textDecoration: "none", fontFamily: "var(--font-mono)",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          ↗ Cekura
+                        </a>
+                      )}
                     </span>
                   )}
                 </div>
