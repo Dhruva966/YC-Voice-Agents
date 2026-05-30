@@ -51,7 +51,8 @@ ngrok http 8000
 | `ATTACKER_GEMINI_VOICE` | `Charon` | Vanguard attacker voice name |
 | `WHISPER_MODEL_SIZE` | `base` | Set to `large-v3` for best transcription quality |
 | `TRANSCRIPT_SCORE_TOP_K` | `50` | Segments selected per scoring dimension |
-| `PERSONA_AGENT_URL` | `http://localhost:8000` | Where Vanguard finds the persona API |
+| `PERSONA_AGENT_URL` | `http://localhost:8000` | Where Vanguard finds the persona API. Use `http://backend:8000` for Docker |
+| `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS allowlist for the frontend |
 
 ### Optional
 | Variable | When needed |

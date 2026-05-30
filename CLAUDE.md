@@ -200,7 +200,8 @@ Treat this as a workflow map. Use slash commands only in tools that support them
 | `TWILIO_AUTH_TOKEN` | ✅ | Twilio auth |
 | `TWILIO_PHONE_NUMBER` | ✅ | Inbound phone number |
 | `CEKURA_API_KEY` | optional | Cekura evaluation; NVIDIA NIM fallback when unset |
-| `CEKURA_BASE_URL` | optional | Cekura endpoint URL |
+| `CEKURA_BASE_URL` | optional | `https://api.cekura.ai` |
+| `ALLOWED_ORIGINS` | optional | Comma-separated CORS allowlist (default: `http://localhost:3000`) |
 | `USE_LOCAL_STORAGE` | optional | `true` (default) → `./local_data/`; `false` → AWS S3 |
 | `USE_LOCAL_RAG` | optional | `true` (default) → ChromaDB; `false` → pgvector/RDS |
 | `TRANSCRIPT_SCORE_TOP_K` | optional | Top segments per scoring dimension (default: `50`) |
