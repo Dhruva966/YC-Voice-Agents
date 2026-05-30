@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "cekura-coordinator": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-coordinator/SKILL.md",
+      "computedHash": "9bd4089f95f3f7b335627734d72edc851c8d6e23f1421c6f9111c064d76594af"
+    },
+    "cekura-create-agent": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-create-agent/SKILL.md",
+      "computedHash": "93a259e03638af4c16f52cc5c10253b0e2c5f78612b975e6863d5ffdbd613536"
+    },
+    "cekura-eval-design": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-eval-design/SKILL.md",
+      "computedHash": "981731ff602bed90255bbeb64c0ca8d9cdd4f7a30eb7fd0592453e79b941d846"
+    },
+    "cekura-fixing-prod-issues": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-fixing-prod-issues/SKILL.md",
+      "computedHash": "c707a3d4c2ef0ac797ab9ce5bf81d5f21c63ddb5528da10c4949b1713e0003a1"
+    },
+    "cekura-metric-design": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-metric-design/SKILL.md",
+      "computedHash": "618050bd85e8c514c2b38c2a113e6840dbebf0b1801449ca83ab732337e27c0f"
+    },
+    "cekura-metric-improvement": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-metric-improvement/SKILL.md",
+      "computedHash": "a7be2af37c071fc83d62e4a8e032b54c83ad5508a88d650e5eb0f311a40dc9db"
+    },
+    "cekura-onboarding": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-onboarding/SKILL.md",
+      "computedHash": "8d830ede371961448ee6ee5dbbfeef20e2c2a079133fcc44547748fc012f6aab"
+    },
+    "cekura-predefined-metrics": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-predefined-metrics/SKILL.md",
+      "computedHash": "0d43b70c43c725fe4a175f86469b41a42c993e1cfd7dbf704af2a4dd15f824dd"
+    },
+    "cekura-self-improving-agent": {
+      "source": "cekura-ai/cekura-skills",
+      "sourceType": "github",
+      "skillPath": "cekura/skills/cekura-self-improving-agent/SKILL.md",
+      "computedHash": "7132a3b1f6d2c645a78faaf6c7643517b7a86a41ecc203575c0c99f5d878413b"
+    }
+  }
+}
