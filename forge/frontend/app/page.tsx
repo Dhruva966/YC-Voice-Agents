@@ -2,7 +2,7 @@
 
 import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { Inter, Fira_Code } from "next/font/google";
+import { Fira_Code } from "next/font/google";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CartesianGrid, Line, LineChart, ResponsiveContainer,
@@ -14,7 +14,7 @@ import {
   Clock, AlertTriangle,
 } from "lucide-react";
 
-const inter = Inter({ subsets: ["latin"] });
+
 const firaCode = Fira_Code({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
@@ -249,38 +249,32 @@ function ImprovementChart({ data }: { data: ChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-        <defs>
-          <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#A78BFA" />
-            <stop offset="100%" stopColor="#7C3AED" />
-          </linearGradient>
-        </defs>
-        <CartesianGrid stroke="#1B2540" vertical={false} strokeDasharray="3 3" />
+        <CartesianGrid stroke="var(--border)" vertical={false} strokeDasharray="3 3" />
         <XAxis dataKey="cycle"
-          tick={{ fill: C.text2, fontSize: 11 }}
-          axisLine={{ stroke: C.border }} tickLine={false} />
+          tick={{ fill: "var(--ink-3)", fontSize: 11 }}
+          axisLine={{ stroke: "var(--border)" }} tickLine={false} />
         <YAxis yAxisId="left" orientation="left" domain={[0, 100]}
-          tick={{ fill: C.text2, fontSize: 11 }}
+          tick={{ fill: "var(--ink-3)", fontSize: 11 }}
           axisLine={false} tickLine={false}
           tickFormatter={(v) => `${v}%`} />
         <YAxis yAxisId="right" orientation="right" domain={["auto", "auto"]}
-          tick={{ fill: C.text2, fontSize: 11 }} axisLine={false} tickLine={false} />
+          tick={{ fill: "var(--ink-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
         <Tooltip
           contentStyle={{
-            background: C.cardUp, border: `1px solid ${C.borderLt}`,
-            borderRadius: 8, color: C.text, fontSize: 12,
-            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+            background: "var(--surface)", border: "1px solid var(--border)",
+            borderRadius: 8, color: "var(--ink)", fontSize: 12,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.08)",
           }}
-          labelStyle={{ color: C.text2, marginBottom: 4 }}
-          cursor={{ stroke: C.borderLt, strokeWidth: 1 }}
+          labelStyle={{ color: "var(--ink-3)", marginBottom: 4 }}
+          cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
         />
         <Line yAxisId="left" type="monotone" dataKey="passRate" name="Pass Rate %"
-          stroke="url(#lineGrad)" strokeWidth={2.5}
-          dot={{ r: 4, fill: C.brand, stroke: C.card, strokeWidth: 2 }}
-          activeDot={{ r: 6, fill: C.brandLt, stroke: C.card, strokeWidth: 2 }} />
+          stroke="var(--clay)" strokeWidth={2.5}
+          dot={{ r: 4, fill: "var(--clay)", stroke: "var(--surface)", strokeWidth: 2 }}
+          activeDot={{ r: 6, fill: "var(--clay-deep)", stroke: "var(--surface)", strokeWidth: 2 }} />
         <Line yAxisId="right" type="monotone" dataKey="suiteSize" name="Attack Variants"
-          stroke={C.text3} strokeWidth={1.5} strokeDasharray="5 3"
-          dot={{ r: 3, fill: C.text3, strokeWidth: 0 }} />
+          stroke="var(--ink-2)" strokeWidth={1.5} strokeDasharray="5 3"
+          dot={{ r: 3, fill: "var(--ink-2)", strokeWidth: 0 }} />
       </LineChart>
     </ResponsiveContainer>
   );
@@ -304,7 +298,7 @@ function Waveform({ color, active }: { color: string; active: boolean }) {
       {WAVE_CONFIGS.map((cfg, i) => (
         <div key={i} style={{
           width: 3, borderRadius: 2,
-          background: active ? color : C.borderLt,
+          background: active ? color : "var(--border)",
           height: active ? undefined : 3,
           minHeight: 3,
           animation: active
@@ -320,15 +314,15 @@ function Waveform({ color, active }: { color: string; active: boolean }) {
 /* ─────────── Score pill ─────────────────────────────────── */
 function ScorePill({ label, value }: { label: string; value?: number }) {
   if (value == null) return null;
-  const color = value >= 70 ? C.success : value >= 40 ? C.warning : C.error;
+  const color = value >= 70 ? "var(--status-green)" : value >= 40 ? "var(--status-amber)" : "var(--status-red)";
   return (
     <div style={{
       display: "inline-flex", alignItems: "center", gap: 4,
-      background: C.card, border: `1px solid ${C.border}`,
-      borderRadius: 6, padding: "3px 8px", fontSize: 11,
+      background: "var(--surface-2)", border: "1px solid var(--border)",
+      borderRadius: "var(--radius-sm)", padding: "3px 8px", fontSize: 11,
     }}>
-      <span style={{ color: C.text2 }}>{label}:</span>
-      <span style={{ color, fontWeight: 600, fontFamily: C.mono }}>{value}%</span>
+      <span style={{ color: "var(--ink-3)" }}>{label}:</span>
+      <span style={{ color, fontWeight: 600, fontFamily: "var(--font-mono)" }}>{value}%</span>
     </div>
   );
 }
@@ -352,16 +346,23 @@ function VanguardCard({
   const hasTx     = (session?.transcript?.turns?.length ?? 0) > 0;
   const [hover, setHover] = useState(false);
 
-  const borderColor = isPassed  ? C.successBd
-    : isFailed  ? C.errorBd
-    : isRunning ? "rgba(124,58,237,0.45)"
-    : C.border;
+  const borderColor = isPassed  ? "var(--status-green)"
+    : isFailed  ? "var(--status-red)"
+    : isRunning ? "var(--clay)"
+    : "var(--border)";
   const glowAnim = isPassed  ? "glow-green  2.8s ease-in-out infinite"
     : isFailed  ? "glow-red   2.8s ease-in-out infinite"
     : isRunning ? "glow-purple 2.8s ease-in-out infinite"
     : "none";
-  const statusColor = isPassed ? C.success : isFailed ? C.error : isRunning ? C.warning : C.text3;
-  const statusBg    = isPassed ? C.successBg : isFailed ? C.errorBg : isRunning ? C.warningBg : "transparent";
+
+  const statusColor = isPassed ? "var(--status-green)"
+    : isFailed ? "var(--status-red)"
+    : isRunning ? "var(--clay-deep)"
+    : "var(--ink-3)";
+  const statusBg = isPassed ? "color-mix(in srgb, var(--status-green) 15%, transparent)"
+    : isFailed ? "color-mix(in srgb, var(--status-red) 15%, transparent)"
+    : isRunning ? "var(--clay-tint)"
+    : "var(--surface-2)";
 
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
@@ -370,13 +371,10 @@ function VanguardCard({
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
-          background: hover && hasTx && isDone ? C.cardUp
-            : isPassed  ? "rgba(34,197,94,0.04)"
-            : isFailed  ? "rgba(239,68,68,0.04)"
-            : isRunning ? "rgba(124,58,237,0.04)"
-            : C.card,
-          border: `${isDone ? 1.5 : 1}px solid ${borderColor}`,
-          borderRadius: 10, padding: 14,
+          background: hover && hasTx && isDone ? "var(--surface-2)"
+            : "var(--surface)",
+          border: `${isDone || isRunning ? 1.5 : 1}px solid ${borderColor}`,
+          borderRadius: "var(--radius-lg)", padding: 14,
           cursor: hasTx ? "pointer" : "default",
           animation: `vg-pop-in 0.32s ease-out ${index * 60}ms both, ${glowAnim}`,
           transition: "background 0.2s, border-color 0.4s",
@@ -385,12 +383,13 @@ function VanguardCard({
         }}
       >
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: C.text, lineHeight: 1.3, flex: 1 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", lineHeight: 1.3, flex: 1 }}>
             {personaName}
           </span>
           <span style={{
             fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 20,
             background: statusBg, color: statusColor, flexShrink: 0, letterSpacing: "0.04em",
+            fontFamily: "var(--font-mono)",
           }}>
             {status}
           </span>
@@ -400,18 +399,18 @@ function VanguardCard({
           {(isRunning || isDone) && session ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 9, color: C.text3, width: 36, flexShrink: 0, letterSpacing: "0.06em", fontFamily: C.mono, textTransform: "uppercase" }}>Atk</span>
-                <Waveform color={C.warning} active={isRunning} />
+                <span style={{ fontSize: 9, color: "var(--ink-3)", width: 72, flexShrink: 0, letterSpacing: "0.06em", fontFamily: "var(--font-mono)", textTransform: "uppercase" }}>ATTACKER</span>
+                <Waveform color="var(--status-amber)" active={isRunning} />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 9, color: C.text3, width: 36, flexShrink: 0, letterSpacing: "0.06em", fontFamily: C.mono, textTransform: "uppercase" }}>Agt</span>
-                <Waveform color={C.brandLt} active={isRunning} />
+                <span style={{ fontSize: 9, color: "var(--ink-3)", width: 72, flexShrink: 0, letterSpacing: "0.06em", fontFamily: "var(--font-mono)", textTransform: "uppercase" }}>AGENT</span>
+                <Waveform color="var(--clay)" active={isRunning} />
               </div>
             </>
           ) : (
             <div style={{ display: "flex", gap: 5, justifyContent: "center", paddingTop: 4 }}>
               {[0, 1, 2].map((i) => (
-                <div key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: C.border }} />
+                <div key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--border)" }} />
               ))}
             </div>
           )}
@@ -419,16 +418,16 @@ function VanguardCard({
 
         {isDone && score !== null && (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ flex: 1, height: 3, background: C.border, borderRadius: 2 }}>
+            <div style={{ flex: 1, height: 3, background: "var(--surface-2)", borderRadius: 2 }}>
               <div style={{
                 width: `${score}%`, height: "100%", borderRadius: 2,
-                background: `linear-gradient(90deg,${isPassed ? C.success : C.error}80,${isPassed ? C.success : C.error})`,
+                background: isPassed ? "var(--status-green)" : "var(--status-red)",
                 transition: "width 0.7s cubic-bezier(.23,1,.32,1)",
               }} />
             </div>
-            <span style={{ fontSize: 11, color: C.text2, width: 32, textAlign: "right", fontFamily: C.mono }}>{score}%</span>
+            <span style={{ fontSize: 11, color: "var(--ink-2)", width: 32, textAlign: "right", fontFamily: "var(--font-mono)" }}>{score}%</span>
             {session?.duration_seconds && (
-              <span style={{ fontSize: 10, color: C.text3, width: 26, fontFamily: C.mono }}>
+              <span style={{ fontSize: 10, color: "var(--ink-3)", width: 26, fontFamily: "var(--font-mono)" }}>
                 {Math.round(session.duration_seconds)}s
               </span>
             )}
@@ -436,7 +435,7 @@ function VanguardCard({
         )}
 
         {isDone && hasTx && (
-          <div style={{ fontSize: 10, color: C.text3, display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)", display: "flex", alignItems: "center", gap: 4 }}>
             <ChevronDown size={10} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
             {isExpanded ? "Hide transcript" : "View transcript"}
           </div>
@@ -453,8 +452,8 @@ function VanguardCard({
             style={{ overflow: "hidden" }}
           >
             <div style={{
-              background: C.bg, border: `1px solid ${C.border}`, borderTop: "none",
-              borderRadius: "0 0 10px 10px", padding: 12,
+              background: "var(--surface-2)", border: "1px solid var(--border)", borderTop: "none",
+              borderRadius: "0 0 var(--radius-lg) var(--radius-lg)", padding: 12,
               maxHeight: 260, overflowY: "auto",
             }}>
               {session.evaluation?.dimension_scores && (
@@ -464,7 +463,7 @@ function VanguardCard({
                   <ScorePill label="Factual"     value={session.evaluation.dimension_scores.factual_accuracy} />
                   <ScorePill label="Degrade"     value={session.evaluation.dimension_scores.graceful_degradation} />
                   {session.evaluation.provider && (
-                    <span style={{ fontSize: 10, color: C.text3, display: "flex", alignItems: "center" }}>
+                    <span style={{ fontSize: 10, color: "var(--ink-3)", display: "flex", alignItems: "center", fontFamily: "var(--font-mono)" }}>
                       via {session.evaluation.provider}
                     </span>
                   )}
@@ -478,16 +477,16 @@ function VanguardCard({
                     alignItems: isAtk ? "flex-start" : "flex-end", marginBottom: 7,
                   }}>
                     <span style={{
-                      fontSize: 9, color: isAtk ? C.warning : C.text3, marginBottom: 2,
-                      letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: C.mono,
+                      fontSize: 9, color: isAtk ? "var(--status-amber)" : "var(--ink-3)", marginBottom: 2,
+                      letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "var(--font-mono)",
                     }}>
-                      {isAtk ? "Attacker" : "Agent"}
+                      {isAtk ? "ATTACKER" : "AGENT"}
                     </span>
                     <div style={{
-                      fontSize: 11, color: C.text, lineHeight: 1.5,
-                      background: isAtk ? C.warningBg : C.card,
-                      border: `1px solid ${isAtk ? C.warningBd : C.border}`,
-                      borderRadius: 7, padding: "5px 10px", maxWidth: "90%",
+                      fontSize: 11, color: "var(--ink)", lineHeight: 1.5,
+                      background: isAtk ? "color-mix(in srgb, var(--status-amber) 8%, var(--surface))" : "var(--surface)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)", padding: "5px 10px", maxWidth: "90%",
                     }}>
                       {turn.text}
                     </div>
@@ -628,6 +627,7 @@ export default function Page() {
   const passRate        = total ? Math.round((passed / total) * 100) : 0;
   const vanguardRunning = !!runId && total > 0 && (passed + (activeRun?.failed || 0)) < total;
   const isFineTuneReady = !!dashboard.adapter_id;
+  const agentReady = systemStatusColor === "green";
 
   const statusItems = useMemo(() => [
     { key: "personality", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
@@ -874,29 +874,86 @@ export default function Page() {
   /* ════════════════ RENDER ════════════════════════════════ */
   return (
     <div
-      className={`${inter.className} ${firaCode.variable}`}
-      style={{ minHeight: "100vh", display: "flex", background: C.bg, color: C.text }}
+      className="bg-paper text-ink"
+      style={{ minHeight: "100vh", display: "flex" }}
     >
+      <style>{`
+        @keyframes vg-pop-in {
+          from { opacity: 0; transform: scale(0.88) translateY(8px); }
+          to   { opacity: 1; transform: scale(1)    translateY(0);   }
+        }
+        @keyframes vg-wave-a { 0%,100% { height: 3px;  } 50% { height: 18px; } }
+        @keyframes vg-wave-b { 0%,100% { height: 5px;  } 50% { height: 14px; } }
+        @keyframes vg-wave-c { 0%,100% { height: 2px;  } 50% { height: 20px; } }
+        @keyframes vg-wave-d { 0%,100% { height: 6px;  } 50% { height: 12px; } }
+
+        @keyframes vg-glow-green {
+          0%,100% { box-shadow: 0 0 8px rgba(62,122,69,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(62,122,69,0.28); }
+        }
+        @keyframes vg-glow-red {
+          0%,100% { box-shadow: 0 0 8px rgba(181,67,43,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(181,67,43,0.28); }
+        }
+        @keyframes glow-green {
+          0%,100% { box-shadow: 0 0 8px rgba(62,122,69,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(62,122,69,0.28); }
+        }
+        @keyframes glow-red {
+          0%,100% { box-shadow: 0 0 8px rgba(181,67,43,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(181,67,43,0.28); }
+        }
+        @keyframes glow-purple {
+          0%,100% { box-shadow: 0 0 8px rgba(180,90,53,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(180,90,53,0.28); }
+        }
+        @keyframes pulse-dot {
+          0%,100% { opacity: 1; transform: scale(1);   }
+          50%      { opacity: 0.5; transform: scale(0.7); }
+        }
+        @keyframes pulse-ring {
+          0%   { box-shadow: 0 0 0 0 rgba(62,122,69,0.35); }
+          70%  { box-shadow: 0 0 0 8px rgba(62,122,69,0); }
+          100% { box-shadow: 0 0 0 0 rgba(62,122,69,0); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+
+        .forge-btn-primary { display:inline-flex; align-items:center; gap:6px; background:var(--clay); color:#fff; font-size:13px; font-weight:600; padding:8px 16px; border-radius:var(--radius-sm); border:none; cursor:pointer; transition:background 0.15s; }
+        .forge-btn-primary:hover { background:var(--clay-deep); }
+        .forge-btn-primary:disabled { opacity:0.45; cursor:not-allowed; }
+
+        .forge-btn-secondary { display:inline-flex; align-items:center; gap:6px; background:var(--surface); color:var(--ink-2); font-size:13px; font-weight:500; padding:8px 14px; border-radius:var(--radius-sm); border:1px solid var(--border); cursor:pointer; transition:background 0.15s; }
+        .forge-btn-secondary:hover { background:var(--surface-2); }
+        .forge-btn-secondary.active { background:var(--clay-tint); border-color:var(--clay); color:var(--clay-deep); }
+
+        .forge-btn-success { display:inline-flex; align-items:center; gap:6px; background:var(--status-green); color:#fff; font-size:13px; font-weight:600; padding:8px 16px; border-radius:var(--radius-sm); border:none; cursor:pointer; }
+        .forge-btn-success:disabled { opacity:0.45; cursor:not-allowed; }
+
+        .forge-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; }
+        .forge-section-label { font-family:var(--font-mono),ui-monospace,monospace; font-size:10px; letter-spacing:0.15em; color:var(--clay); font-weight:600; margin-bottom:10px; }
+        .forge-textarea { width:100%; height:280px; resize:vertical; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:12px 14px; font-size:12px; font-family:var(--font-mono),ui-monospace,monospace; color:var(--ink); line-height:1.6; outline:none; transition:border-color 0.15s; }
+        .forge-textarea:focus { border-color:var(--clay); }
+        .forge-input { flex:1; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 12px; font-size:13px; color:var(--ink); outline:none; transition:border-color 0.15s; }
+        .forge-input:focus { border-color:var(--clay); background:var(--surface); }
+        .forge-nav-btn { display: flex; align-items: center; gap: 9px; padding: 9px 12px; font-size: 13px; color: var(--ink-2); background: transparent; border-radius: var(--radius-sm); border: none; cursor: pointer; text-align: left; transition: all 0.15s; width: 100%; }
+        .forge-nav-btn:hover { background: var(--surface); color: var(--ink); }
+        .forge-nav-btn.active { background: var(--clay-tint); color: var(--clay-deep); font-weight: 600; }
+      `}</style>
       {/* ── SIDEBAR ─────────────────────────────────────── */}
       <aside style={{
-        width: 220, position: "fixed", top: 0, left: 0, bottom: 0,
-        background: C.card, borderRight: `1px solid ${C.border}`,
-        display: "flex", flexDirection: "column", padding: "20px 12px", zIndex: 50,
+        width: 244, position: "fixed", top: 0, left: 0, bottom: 0,
+        background: "var(--surface-2)", borderRight: "1px solid var(--border)",
+        display: "flex", flexDirection: "column", padding: "20px 16px", zIndex: 50,
       }}>
         {/* Brand */}
-        <div style={{ padding: "4px 12px 24px" }}>
-          <div style={{
-            fontSize: 14, fontWeight: 800, letterSpacing: "0.18em",
-            background: `linear-gradient(90deg,${C.brandLt},${C.brand})`,
-            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-            backgroundClip: "text",
-            marginBottom: 3,
-          }}>
+        <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 24, padding: "0 8px" }}>
+          <span style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)" }}>
             FORGE
-          </div>
-          <div style={{ fontSize: 10, color: C.text3, letterSpacing: "0.04em" }}>
-            Voice Agent Infrastructure
-          </div>
+          </span>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--clay)" }} />
         </div>
 
         {/* Nav */}
@@ -907,25 +964,9 @@ export default function Page() {
               <button
                 key={id}
                 onClick={() => scrollTo(id)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 9,
-                  padding: "9px 12px", fontSize: 13,
-                  fontWeight: isActive ? 500 : 400,
-                  color: isActive ? C.text : C.text2,
-                  background: isActive ? "rgba(124,58,237,0.13)" : "transparent",
-                  borderRadius: 8, border: "none", cursor: "pointer",
-                  textAlign: "left", position: "relative",
-                  transition: "all 0.15s",
-                }}
+                className={`forge-nav-btn ${isActive ? "active" : ""}`}
               >
-                {isActive && (
-                  <div style={{
-                    position: "absolute", left: 0, top: 6, bottom: 6, width: 3,
-                    background: `linear-gradient(180deg,${C.brandLt},${C.brand})`,
-                    borderRadius: "0 3px 3px 0",
-                  }} />
-                )}
-                <Icon size={14} color={isActive ? C.brandLt : C.text3} />
+                <Icon size={14} color={isActive ? "var(--clay-deep)" : "var(--ink-3)"} />
                 {label}
               </button>
             );
@@ -933,7 +974,7 @@ export default function Page() {
         </nav>
 
         {/* Status footer */}
-        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: "auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
             <div style={{
               width: 7, height: 7, borderRadius: "50%",
@@ -941,22 +982,22 @@ export default function Page() {
               boxShadow: `0 0 8px ${statusDotColor}`,
               animation: systemStatusColor === "green" ? "pulse-dot 2s ease-in-out infinite" : "none",
             }} />
-            <span style={{ fontSize: 11, color: C.text2, fontWeight: 500 }}>
+            <span style={{ fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
               {systemStatusColor === "green" ? "All Systems Ready"
                : systemStatusColor === "amber" ? "Partial Setup"
                : systemStatusColor === "red"   ? "Not Configured"
                : "Checking…"}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.text3 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
             <Clock size={9} />
-            <span style={{ fontFamily: C.mono }}>{formatTime(lastUpdated)}</span>
+            <span>{formatTime(lastUpdated)}</span>
           </div>
         </div>
       </aside>
 
       {/* ── MAIN ────────────────────────────────────────── */}
-      <main style={{ marginLeft: 220, flex: 1, padding: "36px 52px", maxWidth: 1180 }}>
+      <main style={{ marginLeft: 244, flex: 1, padding: "36px 52px", maxWidth: 1180 }}>
 
         {/* Error toast */}
         <AnimatePresence>
@@ -968,16 +1009,16 @@ export default function Page() {
               transition={{ duration: 0.18 }}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between",
-                background: C.errorBg, border: `1px solid ${C.errorBd}`,
-                color: "#FCA5A5", padding: "10px 16px", borderRadius: 8, marginBottom: 24,
-                fontSize: 13, boxShadow: "0 4px 20px rgba(239,68,68,0.12)",
+                background: "var(--surface)", border: "1.5px solid var(--status-red)",
+                color: "var(--status-red)", padding: "10px 16px", borderRadius: "var(--radius-md)", marginBottom: 24,
+                fontSize: 13, boxShadow: "0 4px 20px rgba(181,67,43,0.12)",
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <AlertTriangle size={14} color={C.error} />
+                <AlertTriangle size={14} color="var(--status-red)" />
                 <span>{error}</span>
               </div>
-              <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: "#FCA5A5", cursor: "pointer", padding: 0, marginLeft: 12 }}>
+              <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: "var(--status-red)", cursor: "pointer", padding: 0, marginLeft: 12 }}>
                 <XCircle size={15} />
               </button>
             </motion.div>
@@ -997,14 +1038,18 @@ export default function Page() {
                 <Zap size={15} color={C.brandLt} />
               </div>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 700, color: C.text, margin: 0, lineHeight: 1.2 }}>Build</h2>
-                <p style={{ fontSize: 11, color: C.text3, margin: 0, marginTop: 2 }}>Ingest transcripts → train your agent</p>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2, letterSpacing: "-0.01em" }}>Build</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Ingest transcripts · extract personality · fine-tune</p>
               </div>
             </div>
-            <PrimaryBtn onClick={uploadAndBuild} disabled={!files.length || busy === "build"}>
+            <button
+              onClick={uploadAndBuild}
+              disabled={!files.length || busy === "build"}
+              className="forge-btn-primary"
+            >
               {busy === "build" ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
               Start Build
-            </PrimaryBtn>
+            </button>
           </div>
 
           {/* Drop zone */}
@@ -1070,18 +1115,19 @@ export default function Page() {
                     <div style={{
                       width: 26, height: 26, borderRadius: "50%",
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      background: done ? `linear-gradient(135deg,${C.brandLt},${C.brand})` : isActive ? C.warningBg : C.card,
-                      border: `2px solid ${done ? C.brand : isActive ? C.warning : C.border}`,
-                      boxShadow: done ? `0 0 10px ${C.brandGlow}` : "none",
+                      background: done ? "var(--clay)" : "var(--surface-2)",
+                      border: done ? "none" : isActive ? "none" : "1px solid var(--border)",
+                      boxShadow: isActive ? "0 0 0 2px var(--status-amber)" : "none",
                       transition: "all 0.3s", flexShrink: 0,
                     }}>
                       {done ? <CheckCircle2 size={13} color="#fff" />
-                        : isActive ? <Loader2 size={12} color={C.warning} className="animate-spin" />
-                        : <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.border }} />}
+                        : isActive ? <Loader2 size={12} color="var(--status-amber)" className="animate-spin" />
+                        : <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--border)" }} />}
                     </div>
                     <span style={{
-                      fontSize: 10, textAlign: "center", whiteSpace: "nowrap",
-                      color: done ? C.text : isActive ? C.warning : C.text3,
+                      fontSize: 11, textAlign: "center", whiteSpace: "nowrap",
+                      fontFamily: "var(--font-mono)",
+                      color: done ? "var(--ink)" : "var(--ink-3)",
                       transition: "color 0.3s", maxWidth: 72,
                       overflow: "hidden", textOverflow: "ellipsis",
                     }}>
@@ -1091,7 +1137,7 @@ export default function Page() {
                   {!isLast && (
                     <div style={{
                       flex: 1, height: 2, marginTop: 12, marginBottom: 20,
-                      background: done ? `linear-gradient(90deg,${C.brand},rgba(124,58,237,0.4))` : C.border,
+                      background: "var(--border)",
                       transition: "background 0.4s",
                     }} />
                   )}
@@ -1106,19 +1152,17 @@ export default function Page() {
               {statusItems.map((item) => (
                 <div key={item.key} style={{
                   display: "flex", alignItems: "center", gap: 8,
-                  background: item.ready ? C.successBg : C.card,
-                  border: `1px solid ${item.ready ? C.successBd : C.border}`,
-                  borderRadius: 8, padding: "10px 14px", transition: "all 0.3s",
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)", padding: "8px 12px", transition: "all 0.3s",
                 }}>
                   <div style={{
                     width: 7, height: 7, borderRadius: "50%",
-                    background: item.ready ? C.success : C.text3,
-                    boxShadow: item.ready ? "0 0 7px rgba(34,197,94,0.5)" : "none",
+                    background: item.ready ? "var(--status-green)" : "var(--ink-3)",
                     flexShrink: 0,
-                    animation: item.ready ? "pulse-ring 2.5s ease-in-out infinite" : "none",
                   }} />
-                  <span style={{ fontSize: 12, color: item.ready ? "#D4FAE5" : C.text2, flex: 1 }}>{item.label}</span>
-                  <span style={{ fontSize: 10, color: item.ready ? C.success : C.text3, fontFamily: C.mono, fontWeight: 600 }}>
+                  <span style={{ fontSize: 13, color: item.ready ? "var(--ink)" : "var(--ink-3)", flex: 1 }}>{item.label}</span>
+                  <span style={{ fontSize: 10, color: item.ready ? "var(--status-green)" : "var(--ink-3)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
                     {item.ready ? "ready" : "—"}
                   </span>
                 </div>
@@ -1129,16 +1173,16 @@ export default function Page() {
           {/* Build results */}
           {buildComplete && personalitySpec && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
-              <Card>
-                <SectionLabel>Personality</SectionLabel>
+              <div className="forge-card">
+                <div className="forge-section-label">Personality</div>
                 {[
                   ["Formality", (personalitySpec.communication_style as Record<string,unknown>)?.formality],
                   ["Hedging",   (personalitySpec.communication_style as Record<string,unknown>)?.hedging_frequency],
                   ["Humor",     (personalitySpec.communication_style as Record<string,unknown>)?.humor_style],
                 ].map(([lbl, val]) => val != null ? (
-                  <div key={String(lbl)} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
-                    <span style={{ color: C.text2 }}>{String(lbl)}</span>
-                    <span style={{ color: C.text, fontFamily: C.mono, fontSize: 11 }}>{String(val)}</span>
+                  <div key={String(lbl)} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: "var(--ink-2)" }}>
+                    <span>{String(lbl)}</span>
+                    <span style={{ color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{String(val)}</span>
                   </div>
                 ) : null)}
                 {(() => {
@@ -1147,54 +1191,54 @@ export default function Page() {
                   if (Array.isArray(domains)) txt = (domains as Array<{domain:string}>).slice(0,2).map(d=>d.domain).join(", ");
                   if (typeof domains === "string") txt = domains;
                   return (
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                      <span style={{ color: C.text2 }}>Domains</span>
-                      <span style={{ color: C.text, fontFamily: C.mono, fontSize: 11 }}>{txt}</span>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--ink-2)" }}>
+                      <span>Domains</span>
+                      <span style={{ color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{txt}</span>
                     </div>
                   );
                 })()}
-              </Card>
-              <Card>
-                <SectionLabel>Gemini Voice</SectionLabel>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
-                  <span style={{ color: C.text2 }}>Voice</span>
-                  <span style={{ color: C.text, fontFamily: C.mono, fontSize: 11 }}>{dashboard.gemini_voice || "Puck"}</span>
+              </div>
+              <div className="forge-card">
+                <div className="forge-section-label">Gemini Voice</div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: "var(--ink-2)" }}>
+                  <span>Voice</span>
+                  <span style={{ color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{dashboard.gemini_voice || "Puck"}</span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                  <span style={{ color: C.text2 }}>Runtime</span>
-                  <span style={{ color: C.success, fontWeight: 600, fontSize: 11 }}>Gemini Live</span>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--ink-2)" }}>
+                  <span>Runtime</span>
+                  <span style={{ color: "var(--status-green)", fontWeight: 600, fontSize: 11 }}>Gemini Live</span>
                 </div>
-              </Card>
-              <Card>
-                <SectionLabel>RAG</SectionLabel>
-                <div style={{ fontSize: 12, fontWeight: 600, color: statusInfo?.rag_ready ? C.success : C.text3 }}>
+              </div>
+              <div className="forge-card">
+                <div className="forge-section-label">RAG</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: statusInfo?.rag_ready ? "var(--status-green)" : "var(--ink-3)" }}>
                   {statusInfo?.rag_ready ? "Knowledge base ready" : "Not ready"}
                 </div>
-              </Card>
-              <Card>
-                <SectionLabel>Fine-tune</SectionLabel>
+              </div>
+              <div className="forge-card">
+                <div className="forge-section-label">Fine-tune</div>
                 <div style={{ fontSize: 12 }}>
                   {dashboard.adapter_id
-                    ? <span style={{ fontFamily: C.mono, fontSize: 11, color: C.success }}>{dashboard.adapter_id.slice(0,26)}…</span>
-                    : <span style={{ color: C.text3 }}>Base model (no fine-tune)</span>}
+                    ? <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--status-green)" }}>{dashboard.adapter_id.slice(0,26)}…</span>
+                    : <span style={{ color: "var(--ink-3)" }}>Base model (no fine-tune)</span>}
                 </div>
-              </Card>
+              </div>
             </div>
           )}
 
           {/* Transcript quality */}
           {transcriptScores && (
-            <Card>
+            <div className="forge-card">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                <SectionLabel>Transcript Quality</SectionLabel>
+                <div className="forge-section-label">TRANSCRIPT QUALITY</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
-                  <span style={{ color: C.text2 }}>
+                  <span style={{ color: "var(--ink-2)" }}>
                     Overall:&nbsp;
-                    <span style={{ color: C.success, fontWeight: 700, fontFamily: C.mono }}>
+                    <span style={{ color: "var(--status-green)", fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 11 }}>
                       {Math.round(transcriptScores.aggregate_score * 10)}%
                     </span>
                   </span>
-                  <span style={{ fontSize: 10, color: C.text3, fontFamily: C.mono }}>
+                  <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
                     {transcriptScores.top_k_turns?.length ?? 0} golden segs
                   </span>
                 </div>
@@ -1202,22 +1246,22 @@ export default function Page() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8 }}>
                 {Object.entries(transcriptScores.dimension_scores).map(([dim, score]) => {
                   const pct   = Math.round((score / 10) * 100);
-                  const color = pct >= 70 ? C.success : pct >= 40 ? C.warning : C.error;
+                  const color = pct >= 70 ? "var(--status-green)" : pct >= 40 ? "var(--status-amber)" : "var(--status-red)";
                   const label = DIMENSION_LABELS[dim] || dim.replace(/_/g," ").replace(/\b\w/g,(c)=>c.toUpperCase());
                   return (
-                    <div key={dim} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
-                      <div style={{ fontSize: 10, color: C.text3, marginBottom: 4, lineHeight: 1.3 }}>{label}</div>
-                      <div style={{ fontSize: 22, fontWeight: 700, color, fontFamily: C.mono, lineHeight: 1, marginBottom: 6 }}>
+                    <div key={dim} style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ink-3)", letterSpacing: "0.04em", marginBottom: 4, lineHeight: 1.3 }}>{label}</div>
+                      <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color, lineHeight: 1, marginBottom: 6 }}>
                         {pct}%
                       </div>
-                      <div style={{ height: 3, background: C.border, borderRadius: 2 }}>
+                      <div style={{ height: 3, background: "var(--border)", borderRadius: 2 }}>
                         <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg,${color}80,${color})`, borderRadius: 2 }} />
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </Card>
+            </div>
           )}
         </section>
 
@@ -1231,84 +1275,80 @@ export default function Page() {
                 border: "1px solid rgba(34,197,94,0.25)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <Phone size={15} color={C.success} />
+                <Phone size={15} color="var(--status-green)" />
               </div>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 700, color: C.text, margin: 0, lineHeight: 1.2 }}>Agent</h2>
-                <p style={{ fontSize: 11, color: C.text3, margin: 0, marginTop: 2 }}>Connect via phone or browser</p>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Agent</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Voice call interface · live chat test</p>
               </div>
             </div>
-            <GreenBtn onClick={callAgent} disabled={busy === "call"}>
+            <button
+              onClick={callAgent}
+              disabled={busy === "call"}
+              className={agentReady ? "forge-btn-success" : "forge-btn-primary"}
+            >
               {busy === "call" ? <Loader2 size={13} className="animate-spin" /> : <Phone size={13} />}
               Call Agent
-            </GreenBtn>
+            </button>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-            <Card>
-              <div style={{ fontSize: 10, color: C.text3, marginBottom: 10, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: C.mono }}>
-                Phone Number
-              </div>
+            <div className="forge-card">
+              <div className="forge-section-label">PHONE NUMBER</div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 22, fontFamily: C.mono, fontWeight: 600, color: C.text, letterSpacing: "0.05em" }}>
-                  {callInfo?.phone_number || <span style={{ color: C.text3 }}>—</span>}
+                <span style={{ fontSize: 22, fontFamily: "var(--font-display)", fontWeight: 600, color: "var(--ink)", letterSpacing: "0.05em" }}>
+                  {callInfo?.phone_number || <span style={{ color: "var(--ink-3)" }}>—</span>}
                 </span>
                 {callInfo?.phone_number && (
-                  <button onClick={() => copyToClipboard(callInfo.phone_number, "phone")} style={{ background: "transparent", border: "none", color: C.text3, cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <button onClick={() => copyToClipboard(callInfo.phone_number, "phone")} style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
                     <Copy size={13} />
-                    {copiedText === "phone" && <span style={{ fontSize: 10, color: C.success, fontFamily: C.mono }}>copied</span>}
+                    {copiedText === "phone" && <span style={{ fontSize: 10, color: "var(--status-green)", fontFamily: "var(--font-mono)" }}>copied</span>}
                   </button>
                 )}
               </div>
-            </Card>
-            <Card>
-              <div style={{ fontSize: 10, color: C.text3, marginBottom: 10, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: C.mono }}>
-                Room URL
-              </div>
+            </div>
+            <div className="forge-card">
+              <div className="forge-section-label">ROOM URL</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 12, fontFamily: C.mono, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                  {callInfo?.room_url || <span style={{ color: C.text3 }}>—</span>}
+                <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  {callInfo?.room_url || <span style={{ color: "var(--ink-3)" }}>—</span>}
                 </span>
                 {callInfo?.room_url && (
                   <>
-                    <button onClick={() => copyToClipboard(callInfo.room_url, "room")} style={{ background: "transparent", border: "none", color: C.text3, cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <button onClick={() => copyToClipboard(callInfo.room_url, "room")} style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
                       <Copy size={13} />
-                      {copiedText === "room" && <span style={{ fontSize: 10, color: C.success, fontFamily: C.mono }}>copied</span>}
+                      {copiedText === "room" && <span style={{ fontSize: 10, color: "var(--status-green)", fontFamily: "var(--font-mono)" }}>copied</span>}
                     </button>
-                    <a href={callInfo.room_url} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: C.brandLt, textDecoration: "none" }}>
+                    <a href={callInfo.room_url} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--clay)", textDecoration: "none" }}>
                       <LinkIcon size={13} /> Open
                     </a>
                   </>
                 )}
               </div>
-            </Card>
+            </div>
           </div>
 
           {/* Chat widget */}
-          <Card>
+          <div className="forge-card">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <SectionLabel>Live Chat Test</SectionLabel>
-              <span style={{ fontSize: 10, color: C.text3 }}>Direct NVIDIA NIM · no caching</span>
+              <div className="forge-section-label">LIVE CHAT TEST</div>
+              <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Direct NVIDIA NIM · no caching</span>
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <input
                 value={chatMessage}
                 onChange={(e) => setChatMessage(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") sendChat(); }}
-                onFocus={() => setChatFocused(true)}
-                onBlur={() => setChatFocused(false)}
                 placeholder="Type a message and press Enter…"
-                style={{
-                  flex: 1, background: C.bg,
-                  border: `1px solid ${chatFocused ? C.brand : C.border}`,
-                  borderRadius: 8, padding: "9px 14px", fontSize: 13, color: C.text, outline: "none",
-                  transition: "border-color 0.2s, box-shadow 0.2s",
-                  boxShadow: chatFocused ? `0 0 0 3px ${C.brandGlow}` : "none",
-                }}
+                className="forge-input"
               />
-              <PrimaryBtn onClick={sendChat} disabled={!chatMessage.trim() || chatLoading}>
+              <button
+                onClick={sendChat}
+                disabled={!chatMessage.trim() || chatLoading}
+                className="forge-btn-primary"
+              >
                 {chatLoading ? <Loader2 size={13} className="animate-spin" /> : "Send"}
-              </PrimaryBtn>
+              </button>
             </div>
             <AnimatePresence>
               {chatResponse && (
@@ -1318,16 +1358,16 @@ export default function Page() {
                   exit={{ opacity: 0, height: 0 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", fontSize: 13, lineHeight: 1.6, color: C.text }}>
+                  <div style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12, fontSize: 13, lineHeight: 1.6, color: "var(--ink)" }}>
                     {chatResponse}
                     {chatLatency !== null && (
-                      <div style={{ marginTop: 8, fontSize: 10, color: C.text3, fontFamily: C.mono }}>{chatLatency}ms</div>
+                      <div style={{ marginTop: 8, fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{chatLatency}ms</div>
                     )}
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
-          </Card>
+          </div>
         </section>
 
         {/* ══════════════ VANGUARD ═══════════════════════ */}
@@ -1340,11 +1380,11 @@ export default function Page() {
                 border: "1px solid rgba(239,68,68,0.25)",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <Shield size={15} color={C.error} />
+                <Shield size={15} color="var(--status-red)" />
               </div>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 700, color: C.text, margin: 0, lineHeight: 1.2 }}>Vanguard</h2>
-                <p style={{ fontSize: 11, color: C.text3, margin: 0, marginTop: 2 }}>Adversarial red-team testing</p>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Vanguard</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Adversarial attack suite · red-team evaluation</p>
               </div>
               {vanguardRunning && <div className="live-badge"><div className="live-dot" />LIVE</div>}
             </div>
@@ -1352,40 +1392,37 @@ export default function Page() {
               <button
                 onClick={toggleAutoLoop}
                 title={autoLoopActive ? "Auto-loop ON" : "Enable auto-improvement loop"}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  background: autoLoopActive ? C.warningBg : "transparent",
-                  border: `1px solid ${autoLoopActive ? C.warning : C.border}`,
-                  color: autoLoopActive ? C.warning : C.text2,
-                  fontSize: 12, fontWeight: 500, padding: "7px 12px",
-                  borderRadius: 8, cursor: "pointer", transition: "all 0.2s",
-                }}
+                className={`forge-btn-secondary ${autoLoopActive ? "active" : ""}`}
               >
                 <Activity size={13} />
                 Auto-loop {autoLoopActive ? "ON" : "OFF"}
               </button>
-              <PrimaryBtn onClick={launchAttack} disabled={busy === "attack"}>
+              <button
+                onClick={launchAttack}
+                disabled={busy === "attack"}
+                className="forge-btn-primary"
+              >
                 {busy === "attack" ? <Loader2 size={13} className="animate-spin" /> : <Shield size={13} />}
                 Launch Attack
-              </PrimaryBtn>
+              </button>
             </div>
           </div>
 
           {/* Stats bar */}
           {total > 0 && (
-            <Card style={{ display: "flex", alignItems: "center", gap: 20, padding: "14px 20px", marginBottom: 16 }}>
+            <div className="forge-card" style={{ display: "flex", alignItems: "center", gap: 20, padding: "14px 20px", marginBottom: 16 }}>
               <PassRateRing rate={passRate} size={68} />
               <div>
                 <div style={{
-                  fontSize: 32, fontWeight: 800, fontFamily: C.mono, lineHeight: 1,
-                  color: passRate >= 80 ? C.success : passRate >= 50 ? C.warning : C.error,
+                  fontSize: 32, fontWeight: 800, fontFamily: "var(--font-mono)", lineHeight: 1,
+                  color: passRate >= 60 ? "var(--status-green)" : "var(--status-red)",
                 }}>
                   {passRate}%
                 </div>
-                <div style={{ fontSize: 12, color: C.text2, marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: passRate >= 60 ? "var(--status-green)" : "var(--status-red)", marginTop: 4 }}>
                   {passed} of {total} passed
                   {vanguardRunning && (
-                    <span style={{ color: C.warning, marginLeft: 10, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ color: "var(--status-amber)", fontFamily: "var(--font-mono)", fontSize: 12, marginLeft: 10, display: "inline-flex", alignItems: "center", gap: 4 }}>
                       <Loader2 size={11} className="animate-spin" />
                       {passed + (activeRun?.failed || 0)}/{total} done
                     </span>
@@ -1394,11 +1431,11 @@ export default function Page() {
               </div>
               {dashboard.attack_suite_size != null && dashboard.attack_suite_size > 0 && (
                 <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: C.text, fontFamily: C.mono }}>{dashboard.attack_suite_size}</div>
-                  <div style={{ fontSize: 11, color: C.text3 }}>attack variants</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-mono)" }}>{dashboard.attack_suite_size}</div>
+                  <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>attack variants</div>
                 </div>
               )}
-            </Card>
+            </div>
           )}
 
           {/* Auto-loop banner */}
@@ -1410,12 +1447,12 @@ export default function Page() {
                 exit={{ opacity: 0, y: -6 }}
                 style={{
                   display: "flex", alignItems: "center", gap: 10,
-                  background: C.warningBg, border: `1px solid ${C.warningBd}`,
-                  borderRadius: 8, padding: "10px 16px", marginBottom: 16,
+                  background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.3)",
+                  borderRadius: "var(--radius-md)", padding: "10px 16px", marginBottom: 16,
                 }}
               >
-                <Loader2 size={13} className="animate-spin" color={C.warning} />
-                <span style={{ fontSize: 13, color: "#FCD34D" }}>
+                <Loader2 size={13} className="animate-spin" color="var(--clay)" />
+                <span style={{ fontSize: 13, color: "var(--clay-deep)" }}>
                   Auto-improving — cycle {autoLoopCycle}/5
                   {autoLoopRunning && !vanguardRunning ? " · running improvement cycle…" : ""}
                 </span>
@@ -1430,36 +1467,36 @@ export default function Page() {
               expandedSessions={expandedGridSession} onToggleSession={toggleGridSession}
             />
           ) : (
-            <Card style={{ padding: 48, textAlign: "center" }}>
-              <Shield size={32} style={{ color: C.text3, marginBottom: 12 }} />
-              <p style={{ fontSize: 13, color: C.text3, margin: 0 }}>
+            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 48, textAlign: "center" }}>
+              <Shield size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
+              <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
                 No sessions yet. Click &ldquo;Launch Attack&rdquo; to begin adversarial testing.
               </p>
-            </Card>
+            </div>
           )}
 
           {/* Worst personas */}
           {worstPersonas.length > 0 && (
-            <Card style={{ marginTop: 16 }}>
-              <SectionLabel>Weakest Attack Categories</SectionLabel>
+            <div className="forge-card" style={{ marginTop: 16 }}>
+              <div className="forge-section-label">WEAKEST ATTACK CATEGORIES</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {worstPersonas.map((item) => {
                   const pName   = PERSONA_NAMES[item.persona] || item.persona;
                   const ratePct = Math.round(item.pass_rate * 100);
-                  const color   = ratePct >= 60 ? C.success : ratePct >= 30 ? C.warning : C.error;
+                  const color   = ratePct >= 60 ? "var(--status-green)" : ratePct >= 30 ? "var(--status-amber)" : "var(--status-red)";
                   return (
                     <div key={item.persona} style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
-                      <span style={{ width: 140, color: C.text, flexShrink: 0 }}>{pName}</span>
-                      <span style={{ color: C.text3, width: 68, flexShrink: 0, fontFamily: C.mono, fontSize: 11 }}>{item.passed}/{item.runs}</span>
-                      <div style={{ flex: 1, height: 4, background: C.border, borderRadius: 2 }}>
-                        <div style={{ width: `${ratePct}%`, height: "100%", background: `linear-gradient(90deg,${color}60,${color})`, borderRadius: 2, transition: "width 0.5s" }} />
+                      <span style={{ width: 140, color: "var(--ink)", flexShrink: 0 }}>{pName}</span>
+                      <span style={{ color: "var(--ink-3)", width: 68, flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 11 }}>{item.passed}/{item.runs}</span>
+                      <div style={{ flex: 1, height: 5, background: "var(--surface-2)", borderRadius: 2 }}>
+                        <div style={{ width: `${ratePct}%`, height: "100%", background: color, borderRadius: 2, transition: "width 0.5s" }} />
                       </div>
-                      <span style={{ color, width: 34, textAlign: "right", fontFamily: C.mono, fontSize: 11, fontWeight: 700 }}>{ratePct}%</span>
+                      <span style={{ color, width: 34, textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>{ratePct}%</span>
                     </div>
                   );
                 })}
               </div>
-            </Card>
+            </div>
           )}
         </section>
 
@@ -1473,19 +1510,26 @@ export default function Page() {
                 border: `1px solid rgba(124,58,237,0.25)`,
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <TrendingUp size={15} color={C.brandLt} />
+                <TrendingUp size={15} color="var(--clay)" />
               </div>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 700, color: C.text, margin: 0, lineHeight: 1.2 }}>Improvement Curve</h2>
-                <p style={{ fontSize: 11, color: C.text3, margin: 0, marginTop: 2 }}>
-                  {cyclesRun} cycle{cyclesRun !== 1 ? "s" : ""} run
-                </p>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--ink)", margin: 0, fontWeight: 600, lineHeight: 1.2 }}>Improvement Curve</h2>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
+                  <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0 }}>RL hardening · pass rate over iterations</p>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--ink-3)" }}>
+                    ({cyclesRun} cycle{cyclesRun !== 1 ? "s" : ""} run)
+                  </span>
+                </div>
               </div>
             </div>
-            <PrimaryBtn onClick={improve} disabled={busy === "improve"}>
+            <button
+              onClick={improve}
+              disabled={busy === "improve"}
+              className="forge-btn-primary"
+            >
               {busy === "improve" ? <Loader2 size={13} className="animate-spin" /> : <Activity size={13} />}
               Run Cycle
-            </PrimaryBtn>
+            </button>
           </div>
 
           <AnimatePresence>
@@ -1496,12 +1540,12 @@ export default function Page() {
                 exit={{ opacity: 0, y: -6 }}
                 style={{
                   display: "flex", alignItems: "center", gap: 10,
-                  background: C.warningBg, border: `1px solid ${C.warningBd}`,
-                  borderRadius: 8, padding: "10px 16px", marginBottom: 16,
+                  background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.3)",
+                  borderRadius: "var(--radius-md)", padding: "10px 16px", marginBottom: 16,
                 }}
               >
-                <Loader2 size={13} className="animate-spin" color={C.warning} />
-                <span style={{ fontSize: 13, color: "#FCD34D" }}>
+                <Loader2 size={13} className="animate-spin" color="var(--clay)" />
+                <span style={{ fontSize: 13, color: "var(--clay-deep)" }}>
                   Improvement cycle running — results will appear when complete.
                 </span>
               </motion.div>
@@ -1510,31 +1554,30 @@ export default function Page() {
 
           {chartData.length > 0 ? (
             <>
-              <Card style={{ height: 296, padding: 20, marginBottom: 14 }}>
+              <div style={{ height: 288, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16, marginBottom: 14 }}>
                 <ImprovementChartNoSsr data={chartData} />
-              </Card>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {chartData.map((point) => {
                   const histItem  = dashboard.pass_rate_history?.find((h) => h.cycle === point.cycle);
                   const regPassed = histItem?.regression_passed;
                   const pr        = point.passRate != null ? Math.round(point.passRate) : null;
-                  const prColor   = pr == null ? C.text3 : pr >= 80 ? C.success : pr >= 50 ? C.warning : C.error;
                   return (
                     <div key={point.cycle} style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "10px 16px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12,
+                      padding: "8px 14px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12,
                     }}>
-                      <span style={{ color: C.text3, fontFamily: C.mono, fontSize: 11 }}>Cycle {point.cycle}</span>
+                      <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Cycle {point.cycle}</span>
                       <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
                         {regPassed !== undefined && (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: regPassed ? C.success : C.error, fontSize: 11, fontFamily: C.mono }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: regPassed ? "var(--status-green)" : "var(--status-red)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
                             Gate {regPassed ? "✓" : "✗"}
                           </span>
                         )}
-                        <span style={{ color: prColor, fontFamily: C.mono, fontWeight: 700 }}>
+                        <span style={{ color: "var(--clay)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
                           {pr != null ? `${pr}%` : "—"} pass
                         </span>
-                        <span style={{ color: C.text3, fontFamily: C.mono, fontSize: 11 }}>
+                        <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
                           {point.suiteSize ?? "—"} variants
                         </span>
                       </div>
@@ -1544,12 +1587,12 @@ export default function Page() {
               </div>
             </>
           ) : (
-            <Card style={{ padding: 56, textAlign: "center" }}>
-              <TrendingUp size={32} style={{ color: C.text3, marginBottom: 12 }} />
-              <p style={{ fontSize: 13, color: C.text3, margin: 0 }}>
+            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 56, textAlign: "center" }}>
+              <TrendingUp size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
+              <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
                 No improvement cycles yet. Run Vanguard first, then run a cycle to see hardening progress.
               </p>
-            </Card>
+            </div>
           )}
         </section>
       </main>

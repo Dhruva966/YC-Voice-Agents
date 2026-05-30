@@ -3,104 +3,43 @@
 @tailwind utilities;
 
 :root {
-  --bg:           #05060F;
-  --card:         #0C1020;
-  --card-up:      #111828;
-  --border:       #1B2540;
-  --border-light: #263A5E;
-  --brand:        #7C3AED;
-  --brand-light:  #A78BFA;
-  --brand-glow:   rgba(124,58,237,0.15);
-  --success:      #22C55E;
-  --success-bg:   rgba(34,197,94,0.08);
-  --success-bd:   rgba(34,197,94,0.25);
-  --error:        #EF4444;
-  --error-bg:     rgba(239,68,68,0.08);
-  --error-bd:     rgba(239,68,68,0.25);
-  --warning:      #F59E0B;
-  --warning-bg:   rgba(245,158,11,0.08);
-  --warning-bd:   rgba(245,158,11,0.25);
-  --text:         #EDF2FF;
-  --text-2:       #8098B8;
-  --text-3:       #3A5070;
-  --font-mono:    'Fira Code', ui-monospace, SFMono-Regular, monospace;
+  --paper: #faf8f3;
+  --surface: #ffffff;
+  --surface-2: #f4efe5;
+  --border: #e6dfd0;
+  --border-soft: #efe9dc;
+  --ink: #1b1a17;
+  --ink-2: #6b6557;
+  --ink-3: #9c9485;
+  --clay: #b45a35;
+  --clay-deep: #9c4825;
+  --clay-tint: #f1e5da;
+  --status-green: #3e7a45;
+  --status-amber: #b58419;
+  --status-red: #b5432b;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --font-display: var(--font-fraunces);
+  --font-body: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  * { border-color: var(--border); box-sizing: border-box; }
+  body {
+    background-color: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body), system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    margin: 0; padding: 0;
+  }
+  ::selection { background-color: var(--clay-tint); color: var(--clay-deep); }
 }
 
-* { box-sizing: border-box; }
-
-/* ── Scrollbar ─────────────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1B2540; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #263A5E; }
-
-/* ── Keyframes ─────────────────────────────────────────── */
-@keyframes vg-pop-in {
-  from { opacity: 0; transform: scale(0.88) translateY(8px); }
-  to   { opacity: 1; transform: scale(1)    translateY(0);   }
-}
-@keyframes vg-wave-a { 0%,100% { height: 3px;  } 50% { height: 18px; } }
-@keyframes vg-wave-b { 0%,100% { height: 5px;  } 50% { height: 14px; } }
-@keyframes vg-wave-c { 0%,100% { height: 2px;  } 50% { height: 20px; } }
-@keyframes vg-wave-d { 0%,100% { height: 6px;  } 50% { height: 12px; } }
-
-@keyframes glow-green  {
-  0%,100% { box-shadow: 0 0 8px rgba(34,197,94,0.12); }
-  50%      { box-shadow: 0 0 22px rgba(34,197,94,0.28); }
-}
-@keyframes glow-red {
-  0%,100% { box-shadow: 0 0 8px rgba(239,68,68,0.12); }
-  50%      { box-shadow: 0 0 22px rgba(239,68,68,0.28); }
-}
-@keyframes glow-purple {
-  0%,100% { box-shadow: 0 0 8px rgba(124,58,237,0.12); }
-  50%      { box-shadow: 0 0 22px rgba(124,58,237,0.28); }
-}
-@keyframes pulse-dot {
-  0%,100% { opacity: 1; transform: scale(1);   }
-  50%      { opacity: 0.5; transform: scale(0.7); }
-}
-@keyframes pulse-ring {
-  0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.35); }
-  70%  { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
-  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
-}
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-
-/* ── Utilities ─────────────────────────────────────────── */
-.animate-spin { animation: spin 1s linear infinite; }
-
-.sr-only {
-  position: absolute; width: 1px; height: 1px;
-  padding: 0; margin: -1px; overflow: hidden;
-  clip: rect(0,0,0,0); white-space: nowrap; border-width: 0;
-}
-
-/* ── Live badge ─────────────────────────────────────────── */
-.live-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
-  color: var(--success);
-  background: var(--success-bg);
-  border: 1px solid var(--success-bd);
-  padding: 3px 9px; border-radius: 20px;
-  text-transform: uppercase;
-}
-.live-dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--success);
-  animation: pulse-dot 1.4s ease-in-out infinite;
+@layer utilities {
+  .font-display { font-family: var(--font-display), Georgia, serif; }
+  .font-mono { font-family: var(--font-mono), ui-monospace, monospace; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .scroll-fade { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 }
