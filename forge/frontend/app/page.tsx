@@ -1,6 +1,6 @@
 "use client";
 
-import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Inter } from "next/font/google";
 import {
@@ -52,6 +52,7 @@ type TranscriptTurn = {
 
 type VanguardSession = {
   session_id: string;
+  attack_definition_id?: string;
   attack_persona: string;
   status: string;
   overall_score?: number;
@@ -174,7 +175,7 @@ const ImprovementChartNoSsr = dynamic(() => Promise.resolve(ImprovementChart), {
 
 export default function Page() {
   const [activeSection, setActiveSection] = useState("build");
-  const [files, setFiles] = useState<File[]>([]);
+  const [rawText, setRawText] = useState<string>("");
   const [completedSteps, setCompletedSteps] = useState<string[]>([]);
   const [buildJobId, setBuildJobId] = useState<string | null>(null);
   const [buildStage, setBuildStage] = useState<string | null>(null);
@@ -445,21 +446,17 @@ export default function Page() {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
   }
 
-  function removeFile(index: number) {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-  }
-
   async function uploadAndBuild() {
     setBusy("build");
     setCompletedSteps([]);
     setError(null);
     try {
-      for (const file of files) {
-        const body = new FormData();
-        body.append("file", file);
-        const res = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, { method: "POST", body });
-        if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
-      }
+      const blob = new Blob([rawText], { type: "text/plain" });
+      const file = new File([blob], "transcripts.txt", { type: "text/plain" });
+      const body = new FormData();
+      body.append("file", file);
+      const ingestRes = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, { method: "POST", body });
+      if (!ingestRes.ok) throw new Error("Upload failed");
       setCompletedSteps(["Ingest", "Transcribe"]);
       const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, { method: "POST" });
       if (!res.ok) {
@@ -718,13 +715,13 @@ export default function Page() {
             <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Build</h2>
             <button
               onClick={uploadAndBuild}
-              disabled={!files.length || busy === "build"}
+              disabled={!rawText.trim() || busy === "build"}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
                 background: busy === "build" ? "#5b21b6" : "#7c3aed",
                 color: "#fff", fontSize: 13, fontWeight: 500,
                 padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "build" ? "not-allowed" : "pointer",
-                opacity: !files.length && busy !== "build" ? 0.5 : 1,
+                opacity: !rawText.trim() && busy !== "build" ? 0.5 : 1,
               }}
             >
               {busy === "build" ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
@@ -732,51 +729,40 @@ export default function Page() {
             </button>
           </div>
 
-          {/* DROP ZONE */}
-          <div style={{
-            border: "2px dashed #1f1f23", background: "#141416", borderRadius: 8,
-            minHeight: 120, display: "flex", flexDirection: "column", alignItems: "center",
-            justifyContent: "center", padding: 24, cursor: "pointer", position: "relative",
-            marginBottom: 16,
-          }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              setFiles(prev => [...prev, ...Array.from(e.dataTransfer.files || [])]);
-            }}
-          >
-            <label htmlFor="file-input" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-              {files.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
-                  {files.map((file, i) => (
-                    <span key={i} style={{
-                      display: "inline-flex", alignItems: "center", gap: 4,
-                      background: "#1f1f23", padding: "4px 8px", borderRadius: 6, fontSize: 12, color: "#f4f4f5",
-                    }}>
-                      {file.name}
-                      <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }} style={{
-                        background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0, display: "inline-flex",
-                      }}>
-                        <XCircle size={12} />
-                      </button>
-                    </span>
-                  ))}
-                  <span style={{ fontSize: 12, color: "#7c3aed", cursor: "pointer", textDecoration: "underline" }}>Add more</span>
-                </div>
-              ) : (
-                <>
-                  <span style={{ fontSize: 13, color: "#f4f4f5", display: "block", marginBottom: 4 }}>
-                    Drop audio, text, CSV, JSON, EML, or PDF files
-                  </span>
-                  <span style={{ fontSize: 11, color: "#71717a" }}>or click to browse</span>
-                </>
+          {/* TRANSCRIPT TEXT INPUT */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#71717a" }}>Paste call transcripts (CALLER: / AGENT: format)</span>
+              {rawText.trim().length > 0 && (
+                <button onClick={() => setRawText("")} style={{
+                  background: "transparent", border: "none", color: "#52525b", cursor: "pointer",
+                  fontSize: 11, display: "inline-flex", alignItems: "center", gap: 4, padding: 0,
+                }}>
+                  <XCircle size={12} /> Clear
+                </button>
               )}
-            </label>
+            </div>
+            <textarea
+              value={rawText}
+              onChange={(e) => setRawText(e.target.value)}
+              placeholder={"=== CALL 1 ===\nCALLER: Hi, I'd like to check my balance.\nAGENT: Of course! Can I verify your identity?\n\n=== CALL 2 ===\n..."}
+              style={{
+                width: "100%", height: 280, background: "#141416",
+                border: rawText.trim() ? "1px solid #3f3f46" : "1px solid #1f1f23",
+                borderRadius: 8, padding: "12px 14px", fontSize: 12,
+                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                color: "#f4f4f5", resize: "vertical", outline: "none",
+                lineHeight: 1.6, boxSizing: "border-box",
+              }}
+              onFocus={(e) => { e.target.style.borderColor = "#7c3aed"; }}
+              onBlur={(e) => { e.target.style.borderColor = rawText.trim() ? "#3f3f46" : "#1f1f23"; }}
+            />
+            {rawText.trim().length > 0 && (
+              <div style={{ fontSize: 10, color: "#52525b", marginTop: 4 }}>
+                {rawText.trim().split("\n").filter(l => l.startsWith("CALLER:") || l.startsWith("AGENT:")).length} turns detected
+              </div>
+            )}
           </div>
-          <input id="file-input" className="sr-only" type="file" multiple accept="audio/*,.txt,.eml,.json,.csv,.pdf" onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            const incoming = Array.from(e.target.files || []);
-            setFiles((prev) => [...prev, ...incoming]);
-          }} />
 
           {/* PIPELINE STEPPER */}
           <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 20 }}>
@@ -1444,7 +1430,13 @@ function VanguardGrid({
   onToggleSession: (id: string) => void;
 }) {
   // Build ordered slots: prefer suite order, fall back to live sessions order
-  const sessionMap = new Map(sessions.map((s) => [s.session_id, s]));
+  // Index by both session_id AND attack_definition_id so pre-fetched suite items
+  // (with old session_ids) match live results (which get new session_ids via _fresh_session).
+  const sessionMap = new Map<string, VanguardSession>();
+  sessions.forEach((s) => {
+    sessionMap.set(s.session_id, s);
+    if (s.attack_definition_id) sessionMap.set(s.attack_definition_id, s);
+  });
 
   type Slot = { personaName: string; session: VanguardSession | null; key: string };
   let slots: Slot[];
