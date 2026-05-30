@@ -18,6 +18,8 @@ const USER_ID = "demo";
 const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Score Transcripts", "Configure Voice", "Build RAG", "Fine-tune"];
 
 const PERSONA_NAMES: Record<string, string> = {
+  unauthorized_commitment: "Unauthorized Commitment",
+  pii_exfiltration: "PII Exfiltration",
   social_engineer: "Social Engineer",
   jailbreaker: "Jailbreaker",
   emotional_escalator: "Emotional Escalator",
@@ -237,7 +239,7 @@ export default function Page() {
   const total = activeRun?.total || 0;
   const passed = activeRun?.passed || 0;
   const passRate = total ? Math.round((passed / total) * 100) : 0;
-  const vanguardRunning = !!runId && total > 0 && (passed + (activeRun?.failed || 0)) < total;
+  const vanguardRunning = !!runId && (total === 0 || (passed + (activeRun?.failed || 0)) < total);
 
   const isFineTuneReady = !!dashboard.adapter_id;
 
@@ -298,19 +300,24 @@ export default function Page() {
         const res = await fetch(`${API_BASE}/users/${USER_ID}/build/status`);
         if (!res.ok) return;
         const status: BuildStatus = await res.json();
-        const nextSteps = new Set(completedSteps);
-        if (status.stage.includes("personality")) nextSteps.add("Extract Personality");
-        if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") nextSteps.add("Score Transcripts");
-        if (status.stage.includes("voice")) nextSteps.add("Configure Voice");
-        if (status.stage.includes("rag")) nextSteps.add("Build RAG");
-        if (status.stage.includes("fine")) nextSteps.add("Fine-tune");
-        if (status.status === "completed") BUILD_STEPS.forEach((s) => nextSteps.add(s));
-        setCompletedSteps(Array.from(nextSteps));
+        setCompletedSteps((prev) => {
+          const next = new Set(prev);
+          if (status.stage.includes("personality")) next.add("Extract Personality");
+          if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") next.add("Score Transcripts");
+          if (status.stage.includes("voice")) next.add("Configure Voice");
+          if (status.stage.includes("rag")) next.add("Build RAG");
+          if (status.stage.includes("fine")) next.add("Fine-tune");
+          if (status.status === "completed") BUILD_STEPS.forEach((s) => next.add(s));
+          return Array.from(next);
+        });
         setBuildStage(status.stage);
         if (status.status === "completed" || status.status === "failed") {
           window.clearInterval(timer);
           refreshDashboard();
           fetchStatus();
+          if (status.status === "failed") {
+            setError(status.error || "Build pipeline failed");
+          }
           if (status.status === "completed") {
             fetchTranscriptScores();
           }
@@ -320,7 +327,7 @@ export default function Page() {
       }
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [buildJobId, completedSteps]);
+  }, [buildJobId]);
 
   useEffect(() => {
     if (!runId) return;
@@ -440,6 +447,10 @@ export default function Page() {
       }
       setCompletedSteps(["Ingest", "Transcribe"]);
       const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, { method: "POST" });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || "Build failed to start");
+      }
       const payload = await res.json();
       setBuildJobId(payload.job_id);
     } catch (e) {
@@ -474,7 +485,10 @@ export default function Page() {
       } catch { /* best-effort — grid degrades gracefully */ }
 
       const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
-      if (!res.ok) throw new Error("Launch attack failed");
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || "Launch attack failed");
+      }
       const payload = await res.json();
       setRunId(payload.run_id);
       setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });

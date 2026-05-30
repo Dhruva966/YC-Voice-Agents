@@ -29,6 +29,8 @@ def _strip_json_fences(raw: str) -> str:
 
 
 def extract_personality(corpus: str) -> dict[str, Any]:
+    if not corpus.strip():
+        raise ValueError("Corpus is empty — upload transcripts before building.")
     trimmed = corpus[:80000]
     prompt = personality_extraction(trimmed)
     client = OpenAI(api_key=os.getenv("NVIDIA_API_KEY"), base_url=os.getenv("NVIDIA_BASE_URL"))
@@ -41,7 +43,7 @@ def extract_personality(corpus: str) -> dict[str, Any]:
                 {"role": "system", "content": prompt["system"]},
                 {"role": "user", "content": prompt["user"]},
             ],
-            temperature=0.1,
+            temperature=0,
             response_format={"type": "json_object"},
         )
         raw_output = response.choices[0].message.content or ""

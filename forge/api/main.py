@@ -7,12 +7,15 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 import openai
 import httpx
@@ -39,7 +42,6 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipeline.persona_bot import (
     DynamicPersonaContext,
-    build_initial_system_prompt,
     build_dynamic_system_prompt,
     rewrite_rag_query,
 )
@@ -199,12 +201,26 @@ async def _create_daily_room(name: str | None = None) -> dict[str, str]:
         return {"room_url": room["url"], "token": token_response.json()["token"]}
 
 
+_ALLOWED_UPLOAD_SUFFIXES = {".mp3", ".mp4", ".wav", ".m4a", ".webm", ".ogg", ".txt", ".eml", ".json", ".csv", ".md", ".pdf", ".docx"}
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
+
+
 @app.post("/users/{user_id}/ingest")
 async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-    suffix = Path(file.filename or "upload.bin").suffix
+    suffix = Path(file.filename or "upload.bin").suffix.lower()
+    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+        raise HTTPException(status_code=400, detail=f"File type {suffix!r} not allowed")
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+        if total > _MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 500 MB limit")
+        chunks.append(chunk)
+    data = b"".join(chunks)
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
         path = Path(handle.name)
-        handle.write(await file.read())
+        handle.write(data)
     try:
         return await ingest_file(user_id, str(path), file.filename)
     finally:
@@ -434,12 +450,17 @@ async def media_stream(websocket: WebSocket):
 
 def _run_vanguard_background(user_id: str, run_id: str) -> None:
     import threading
-    suite = load_attack_suite(user_id)
     _vanguard_live[run_id] = []
-    _vanguard_live_totals[run_id] = len(suite)
-    persona_agent_url = os.getenv("PERSONA_AGENT_URL", "http://localhost:8000")
-    asyncio.run(run_vanguard(user_id, run_id, persona_agent_url, suite, live_results=_vanguard_live))
-    # Clean up in-memory results after 5 minutes (enough for frontend to finish polling)
+    _vanguard_live_totals[run_id] = -1  # -1 = initializing, -2 = error
+    try:
+        suite = load_attack_suite(user_id)
+        _vanguard_live_totals[run_id] = len(suite)
+        persona_agent_url = os.getenv("PERSONA_AGENT_URL", "http://localhost:8000")
+        asyncio.run(run_vanguard(user_id, run_id, persona_agent_url, suite, live_results=_vanguard_live))
+    except Exception:
+        LOGGER.exception("vanguard_background_failed run_id=%s", run_id)
+        _vanguard_live_totals[run_id] = -2
+
     def _cleanup() -> None:
         time.sleep(300)
         _vanguard_live.pop(run_id, None)
@@ -476,20 +497,29 @@ async def vanguard_runs(user_id: str) -> list[dict[str, Any]]:
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}")
 async def vanguard_run_result(user_id: str, run_id: str) -> dict[str, Any]:
+    if not _UUID_RE.match(run_id) and not run_id.startswith("cycle_"):
+        raise HTTPException(status_code=400, detail="Invalid run_id format")
     return _get_json_key(f"{user_id}/vanguard_runs/{run_id}.json")
 
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}/live")
-async def vanguard_run_live(user_id: str, run_id: str) -> dict[str, Any]:
+async def vanguard_run_live(user_id: str, run_id: str) -> dict[str, Any]:  # noqa: ARG001
     sessions = list(_vanguard_live.get(run_id, []))
     expected = _vanguard_live_totals.get(run_id)
-    complete = expected is not None and len(sessions) >= expected
-    return {"sessions": sessions, "complete": complete, "total": len(sessions), "expected_total": expected or 0}
+    error = expected == -2
+    complete = error or (expected is not None and expected >= 0 and len(sessions) >= expected)
+    return {
+        "sessions": sessions,
+        "complete": complete,
+        "total": len(sessions),
+        "expected_total": max(0, expected or 0),
+        "error": error,
+    }
 
 
 @app.get("/users/{user_id}/attack_suite")
 async def get_attack_suite(user_id: str) -> list[dict[str, Any]]:
-    return load_attack_suite(user_id)
+    return await asyncio.to_thread(load_attack_suite, user_id)
 
 
 @app.post("/users/{user_id}/vanguard/improve", response_model=QueuedResponse)
@@ -565,8 +595,8 @@ async def dashboard(user_id: str) -> dict[str, Any]:
         if key.endswith(".json"):
             cycles.append(_get_json_key(key))
     cycles = sorted(cycles, key=lambda item: item.get("cycle_number", 0))
-    suite_size = len(load_attack_suite(user_id))
-    pass_rate_by_persona = _aggregate_pass_rate_by_persona(user_id)
+    suite_size = len(await asyncio.to_thread(load_attack_suite, user_id))
+    pass_rate_by_persona = await asyncio.to_thread(_aggregate_pass_rate_by_persona, user_id)
     return {
         "personality_spec": personality_spec,
         "voice_id": voice_id,
@@ -596,7 +626,12 @@ async def get_user_status(user_id: str):
     """Returns real-time readiness status for a user."""
     from pathlib import Path
 
-    local_data = Path("local_data") / user_id
+    safe_id = user_id.lstrip("/")
+    if ".." in safe_id or safe_id.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid user_id")
+    local_data = (Path("local_data") / safe_id).resolve()
+    if not str(local_data).startswith(str(Path("local_data").resolve())):
+        raise HTTPException(status_code=400, detail="Invalid user_id")
 
     # personality_spec_ready
     spec_path = local_data / "personality" / "personality_spec.json"

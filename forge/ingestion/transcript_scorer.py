@@ -167,11 +167,11 @@ def _score_turn(turn: ScoredTurn, client: OpenAI, model: str) -> dict[str, float
             data = json.loads(raw)
         except json.JSONDecodeError:
             LOGGER.warning("score_turn_json_error source=%s turn=%d raw=%r", turn.source_file, turn.turn_index, raw[:200])
-            return {d: 5.0 for d in _DIMENSIONS}
-        return {d: float(data.get(d, 5.0)) for d in _DIMENSIONS}
+            return {d: 0.0 for d in _DIMENSIONS}
+        return {d: max(0.0, min(10.0, float(data.get(d, 0.0)))) for d in _DIMENSIONS}
     except Exception:
         LOGGER.warning("score_turn_failed source=%s turn=%d", turn.source_file, turn.turn_index)
-        return {d: 5.0 for d in _DIMENSIONS}
+        return {d: 0.0 for d in _DIMENSIONS}
 
 
 def _select_top_k(turns: list[ScoredTurn], k: int) -> list[ScoredTurn]:
