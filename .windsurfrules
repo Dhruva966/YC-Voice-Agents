@@ -1,0 +1,38 @@
+# Forge — Windsurf Rules
+
+Canonical reference: **CLAUDE.md** (read first and in full).
+
+## Quick Orientation
+
+| What | Where |
+|------|-------|
+| FastAPI app + all routes | `forge/api/main.py` |
+| Pipecat voice pipeline | `forge/pipeline/persona_bot.py` |
+| All prompts | `forge/prompts.py` — never inline LLM strings |
+| Storage shim | `forge/storage.py` — never `import boto3` directly |
+| RAG | `forge/rag/retriever.py` |
+| Transcript scorer | `forge/ingestion/transcript_scorer.py` |
+| Frontend dashboard | `forge/frontend/app/page.tsx` |
+
+## Subsystem Docs (read when editing that module)
+
+- `forge/api/CLAUDE.md` — route patterns, BackgroundTasks, forbidden patterns
+- `forge/pipeline/CLAUDE.md` — Gemini 3.1 Flash Live pipeline rules
+- `forge/ingestion/CLAUDE.md` — transcript scorer algorithm, ingestion routing
+- `forge/vanguard/CLAUDE.md` — attack sessions, semaphore pattern, session contracts
+
+## Three Rules That Matter Most
+
+1. **All prompts in `prompts.py`** — never inline LLM call strings anywhere else
+2. **All storage via `storage.py` shim** — never `import boto3; boto3.client("s3", ...)`
+3. **Long-running work in `BackgroundTasks`** — never block FastAPI's async event loop
+
+## Capability Routing
+
+| Task | Model |
+|------|-------|
+| Isolated edits, boilerplate (1-2 files) | small/fast model |
+| Feature implementation, multi-file refactors | standard coding model |
+| Architecture, security review, root-cause | strongest available reasoning model |
+
+Map these tiers to Windsurf's available models. Do not treat Claude model names in CLAUDE.md as literal requirements for Windsurf.
