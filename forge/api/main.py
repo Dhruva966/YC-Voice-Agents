@@ -606,6 +606,11 @@ async def media_stream_nvidia(websocket: WebSocket):
         call_sid = data["start"].get("callSid", "")
         # Resolve user_id from callSid or fall back to "demo"
         user_id = data["start"].get("customParameters", {}).get("user_id", "demo")
+        try:
+            user_id = _validate_user_id(user_id)
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
         from pipecat.serializers.twilio import TwilioFrameSerializer
         from pipecat.transports.websocket.fastapi import (
             FastAPIWebsocketTransport, FastAPIWebsocketParams,
