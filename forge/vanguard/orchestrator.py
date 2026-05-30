@@ -82,6 +82,7 @@ async def _run_one_session(user_id: str, persona_agent_url: str, session: dict[s
         session["attack_persona"],
         personality_spec=session.get("personality_spec"),
         rag_summaries=session.get("rag_summaries", ""),
+        user_id=user_id,
     )
     return {
         **session,
