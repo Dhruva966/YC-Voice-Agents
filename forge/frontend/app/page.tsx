@@ -640,6 +640,258 @@ function VanguardGrid({
   );
 }
 
+/* ─────────── Transcript Stream Panel ───────────────────── */
+function TranscriptStreamPanel({
+  turns, isActive, loading,
+}: {
+  turns: Array<{ caller: string; agent: string; aggregate: number }>;
+  isActive: boolean;
+  loading?: boolean;
+}) {
+  const [shownCount, setShownCount] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (loading || turns.length === 0) { setShownCount(0); return; }
+    setShownCount(0);
+    let count = 0;
+    let cancelled = false;
+    const t = setInterval(() => {
+      if (cancelled) return;
+      count = Math.min(count + 1, turns.length);
+      setShownCount(count);
+      if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      if (count >= turns.length) clearInterval(t);
+    }, isActive ? 500 : 800);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [turns, isActive, loading]);
+
+  const progress = turns.length > 0 ? Math.round((shownCount / turns.length) * 100) : 0;
+
+  return (
+    <div style={{
+      background: "var(--surface)", border: "1px solid var(--border)",
+      borderRadius: "var(--radius-lg)", overflow: "hidden", marginBottom: 20,
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "10px 16px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{
+            width: 7, height: 7, borderRadius: "50%",
+            background: loading || isActive ? "var(--status-amber)" : "var(--status-green)",
+            animation: (loading || isActive) ? "pulse-dot 1.4s ease-in-out infinite" : "none",
+          }} />
+          <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", letterSpacing: "0.12em", color: "var(--ink-3)", fontWeight: 600, textTransform: "uppercase" }}>
+            {loading ? "Scanning Transcripts…" : isActive ? "Analyzing Transcript Quality" : "Golden Segments"}
+          </span>
+        </div>
+        {!loading && turns.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>{shownCount}/{turns.length}</span>
+            <div style={{ width: 72, height: 3, background: "var(--border)", borderRadius: 2 }}>
+              <div style={{ width: `${progress}%`, height: "100%", background: "linear-gradient(90deg,var(--clay),var(--status-amber))", borderRadius: 2, transition: "width 0.25s" }} />
+            </div>
+          </div>
+        )}
+      </div>
+      <div ref={containerRef} style={{ height: 260, overflowY: "auto", padding: "12px 16px", scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" }}>
+        {loading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {[0.7, 0.9, 0.6, 0.85, 0.75].map((w, i) => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ height: 10, width: `${w * 60}%`, background: "var(--surface-2)", borderRadius: 3, animation: `pulse-dot 2s ease-in-out ${i * 0.18}s infinite` }} />
+                <div style={{ height: 10, width: `${w * 78}%`, alignSelf: "flex-end", background: "var(--clay-tint)", borderRadius: 3, animation: `pulse-dot 2s ease-in-out ${i * 0.18 + 0.3}s infinite` }} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <AnimatePresence initial={false}>
+            {turns.slice(0, shownCount).map((turn, i) => (
+              <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} style={{ marginBottom: 12 }}>
+                <div style={{ marginBottom: 3 }}>
+                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--status-amber)", letterSpacing: "0.07em", textTransform: "uppercase" }}>CALLER </span>
+                  <div style={{
+                    display: "inline-block",
+                    background: "color-mix(in srgb, var(--status-amber) 7%, var(--surface))",
+                    border: "1px solid color-mix(in srgb, var(--status-amber) 18%, transparent)",
+                    borderRadius: "0 var(--radius-sm) var(--radius-sm) var(--radius-sm)",
+                    padding: "5px 10px", fontSize: 12, color: "var(--ink)", lineHeight: 1.5, maxWidth: "82%",
+                  }}>{turn.caller}</div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--clay)", letterSpacing: "0.07em", textTransform: "uppercase" }}>AGENT</span>
+                  <div style={{
+                    background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.22)",
+                    borderRadius: "var(--radius-sm) 0 var(--radius-sm) var(--radius-sm)",
+                    padding: "5px 10px", fontSize: 12, color: "var(--ink)", lineHeight: 1.5, maxWidth: "82%", textAlign: "right",
+                  }}>{turn.agent}</div>
+                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", marginTop: 2, color: turn.aggregate >= 7 ? "var(--status-green)" : turn.aggregate >= 4 ? "var(--status-amber)" : "var(--status-red)" }}>
+                    quality {turn.aggregate.toFixed(1)}
+                  </span>
+                </div>
+              </motion.div>
+            ))}
+            {(isActive || shownCount < turns.length) && turns.length > 0 && (
+              <motion.div key="cursor" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div style={{ display: "inline-block", width: 8, height: 14, background: "var(--clay)", borderRadius: 1, animation: "pulse-dot 0.9s ease-in-out infinite" }} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────── Battle Arena ───────────────────────────────── */
+function BattleArena({ session, isRunning }: { session: VanguardSession | null; isRunning: boolean }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevLen = useRef(0);
+
+  const turns = session?.transcript?.turns || [];
+  const personaName = session ? (PERSONA_NAMES[session.attack_persona] || session.attack_persona) : "—";
+  const isPassed = session?.status === "passed";
+  const isFailed = session?.status === "failed";
+  const score    = session?.overall_score != null ? Math.round(session.overall_score) : null;
+
+  useEffect(() => {
+    if (scrollRef.current && turns.length > prevLen.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+    prevLen.current = turns.length;
+  }, [turns.length]);
+
+  if (!session) return null;
+
+  const isAtk = (role: string) => role === "caller" || role === "user" || role.toLowerCase() === "attacker";
+  const borderColor = isPassed ? "var(--status-green)" : isFailed ? "var(--status-red)" : isRunning ? "rgba(180,90,53,0.45)" : "var(--border)";
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} transition={{ duration: 0.3 }}
+      style={{
+        background: "var(--surface)", border: `1.5px solid ${borderColor}`,
+        borderRadius: "var(--radius-lg)", overflow: "hidden", marginBottom: 16,
+        boxShadow: isRunning ? "0 0 28px rgba(180,90,53,0.07)" : "none",
+        transition: "border-color 0.4s, box-shadow 0.4s",
+      }}
+    >
+      {/* Header bar */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "9px 16px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", letterSpacing: "0.12em", color: "var(--ink-3)", fontWeight: 600, textTransform: "uppercase" }}>Battle Arena</span>
+          {isRunning && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--status-amber)", fontWeight: 700 }}>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--status-amber)", animation: "pulse-dot 1.2s ease-in-out infinite" }} />
+              LIVE
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {score !== null && (
+            <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700, color: isPassed ? "var(--status-green)" : isFailed ? "var(--status-red)" : "var(--ink-3)" }}>
+              {score}% score
+            </span>
+          )}
+          {session.duration_seconds && (
+            <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{Math.round(session.duration_seconds)}s</span>
+          )}
+        </div>
+      </div>
+
+      {/* Two-agent split */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "1px solid var(--border)" }}>
+        <div style={{
+          padding: "14px 20px", borderRight: "1px solid var(--border)",
+          background: "color-mix(in srgb, var(--status-red) 4%, var(--surface))",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
+        }}>
+          <div style={{
+            width: 38, height: 38, borderRadius: "50%",
+            background: "color-mix(in srgb, var(--status-red) 12%, var(--surface))",
+            border: "1.5px solid color-mix(in srgb, var(--status-red) 35%, transparent)",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+          }}>🎭</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--status-red)", marginBottom: 1 }}>{personaName}</div>
+            <div style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--ink-3)", letterSpacing: "0.08em" }}>ATTACKER</div>
+          </div>
+          <Waveform color="var(--status-red)" active={isRunning} />
+        </div>
+        <div style={{
+          padding: "14px 20px",
+          background: "color-mix(in srgb, var(--clay) 4%, var(--surface))",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
+        }}>
+          <div style={{
+            width: 38, height: 38, borderRadius: "50%", background: "var(--clay-tint)",
+            border: "1.5px solid rgba(180,90,53,0.35)",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+          }}>🤖</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--clay-deep)", marginBottom: 1 }}>Forge Agent</div>
+            <div style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--ink-3)", letterSpacing: "0.08em" }}>DEFENDER</div>
+          </div>
+          <Waveform color="var(--clay)" active={isRunning} />
+        </div>
+      </div>
+
+      {/* Conversation */}
+      <div ref={scrollRef} style={{
+        height: 224, overflowY: "auto", padding: "14px 16px",
+        display: "flex", flexDirection: "column", gap: 7,
+        scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent",
+      }}>
+        {turns.length === 0 && (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+              {isRunning ? "Waiting for conversation to begin…" : "No transcript available."}
+            </span>
+          </div>
+        )}
+        <AnimatePresence initial={false}>
+          {turns.map((turn, i) => {
+            const attacker = isAtk(turn.role);
+            return (
+              <motion.div key={`t-${i}`} initial={{ opacity: 0, x: attacker ? -14 : 14 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.22 }}
+                style={{ display: "flex", justifyContent: attacker ? "flex-start" : "flex-end" }}>
+                <div style={{
+                  maxWidth: "74%",
+                  background: attacker ? "color-mix(in srgb, var(--status-red) 8%, var(--surface))" : "var(--clay-tint)",
+                  border: attacker ? "1px solid color-mix(in srgb, var(--status-red) 22%, transparent)" : "1px solid rgba(180,90,53,0.24)",
+                  borderRadius: attacker ? "0 var(--radius-sm) var(--radius-sm) var(--radius-sm)" : "var(--radius-sm) 0 var(--radius-sm) var(--radius-sm)",
+                  padding: "7px 11px", fontSize: 12, color: "var(--ink)", lineHeight: 1.55,
+                }}>{turn.text}</div>
+              </motion.div>
+            );
+          })}
+          {isRunning && (
+            <motion.div key="typing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ display: "flex", justifyContent: "flex-end" }}>
+              <div style={{
+                display: "flex", gap: 4, padding: "8px 12px",
+                background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.24)",
+                borderRadius: "var(--radius-sm) 0 var(--radius-sm) var(--radius-sm)", alignItems: "center",
+              }}>
+                {[0, 1, 2].map((j) => (
+                  <div key={j} style={{
+                    width: 5, height: 5, borderRadius: "50%", background: "var(--clay)",
+                    animation: `pulse-dot 1.2s ease-in-out ${j * 0.2}s infinite`,
+                  }} />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
+  );
+}
+
 /* ═════════════════════════════════════════════════════════ *
  *  MAIN PAGE                                                *
  * ═════════════════════════════════════════════════════════ */
@@ -737,6 +989,17 @@ export default function Page() {
   const buildComplete   = buildStage === "submitted" || completedSteps.length >= BUILD_STEPS.length || !!dashboard.personality_spec;
   const personalitySpec = dashboard.personality_spec as Record<string, unknown> | null | undefined;
   const sessions        = activeRun?.sessions || [];
+
+  const featuredSession = useMemo(() => {
+    if (sessions.length === 0) return null;
+    const running = sessions.filter((s) => s.status === "running");
+    if (running.length > 0) {
+      return running.reduce((best, curr) =>
+        (curr.transcript?.turns?.length || 0) > (best.transcript?.turns?.length || 0) ? curr : best
+      );
+    }
+    return sessions[sessions.length - 1];
+  }, [sessions]);
 
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
@@ -1160,7 +1423,7 @@ export default function Page() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
             <Clock size={9} />
-            <span>{formatTime(lastUpdated)}</span>
+            <span suppressHydrationWarning>{formatTime(lastUpdated)}</span>
           </div>
         </div>
       </aside>
@@ -1315,6 +1578,15 @@ export default function Page() {
             })}
           </div>
 
+          {/* Transcript stream panel */}
+          {(buildJobId !== null || (transcriptScores?.top_k_turns?.length ?? 0) > 0) && (
+            <TranscriptStreamPanel
+              turns={transcriptScores?.top_k_turns || []}
+              isActive={buildJobId !== null}
+              loading={buildJobId !== null && !transcriptScores}
+            />
+          )}
+
           {/* Status grid */}
           {statusInfo && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 20 }}>
@@ -1393,6 +1665,11 @@ export default function Page() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Personality constellation */}
+          {transcriptScores && (
+            <PersonalityConstellationNoSsr scores={transcriptScores.dimension_scores} />
           )}
 
           {/* Transcript quality */}
@@ -1606,6 +1883,17 @@ export default function Page() {
               )}
             </div>
           )}
+
+          {/* Battle arena */}
+          <AnimatePresence>
+            {featuredSession && (
+              <BattleArena
+                key={featuredSession.session_id}
+                session={featuredSession}
+                isRunning={featuredSession.status === "running"}
+              />
+            )}
+          </AnimatePresence>
 
           {/* Auto-loop banner */}
           <AnimatePresence>
