@@ -69,7 +69,7 @@ class DynamicPersonaContext:
         from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
         self._context = LLMContext()
-        self._aggregator = LLMContextAggregatorPair(self._context, realtime_service_mode=True)
+        self._aggregator = LLMContextAggregatorPair(self._context)
         self._context.add_message({"role": "system", "content": initial_system_prompt})
 
     def user(self):
@@ -137,14 +137,14 @@ def run_persona_bot(
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GEMINI_API_KEY"),
         settings=GeminiLiveLLMService.Settings(
-            model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"),
             voice=gemini_voice,
             system_instruction=initial_system_prompt,
         ),
     )
 
     context = LLMContext()
-    context_aggregator = LLMContextAggregatorPair(context, realtime_service_mode=True)
+    context_aggregator = LLMContextAggregatorPair(context)
 
     class _DynamicPersonaUpdater(FrameProcessor):
         """Re-injects RAG context into the system prompt on each user turn."""

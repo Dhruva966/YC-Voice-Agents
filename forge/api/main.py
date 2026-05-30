@@ -517,7 +517,7 @@ async def media_stream(websocket: WebSocket):
         llm = GeminiLiveLLMService(
             api_key=os.getenv("GEMINI_API_KEY"),
             settings=GeminiLiveLLMService.Settings(
-                model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"),
                 voice=os.getenv("GEMINI_VOICE", "Puck"),
                 system_instruction=initial_system_prompt,
             ),
