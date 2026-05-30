@@ -117,7 +117,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Forge", version="0.1.0", lifespan=lifespan)
-_allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",") if o.strip()]
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:3001,http://localhost:3100,http://localhost:3101",
+    ).split(",")
+    if o.strip()
+]
 if "*" in _allowed_origins:
     raise RuntimeError("ALLOWED_ORIGINS cannot be '*' when allow_credentials=True — set explicit origins")
 app.add_middleware(
@@ -166,6 +173,8 @@ class JoinRoomRequest(BaseModel):
     room_url: str
     daily_token: str
     user_name: str = "demo"
+    mode: str = "robust"
+
 
 
 def _base_model() -> str:
@@ -329,8 +338,32 @@ _ALLOWED_UPLOAD_SUFFIXES = {".mp3", ".mp4", ".wav", ".m4a", ".webm", ".ogg", ".t
 _MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 
 
+def _bootstrap_instant_persona(user_id: str) -> None:
+    try:
+        from personality.extractor import extract_instant_personality, save_instant_personality_spec
+        from ingestion.pipeline import get_user_corpus, get_user_transcripts
+        import json
+        
+        # Load corpus and transcripts
+        corpus_texts = get_user_corpus(user_id)
+        transcripts = get_user_transcripts(user_id)
+        transcript_texts = [json.dumps(item, ensure_ascii=True) for item in transcripts]
+        full_text = "\n\n".join(corpus_texts + transcript_texts).strip()
+        
+        # Extract a short snippet
+        snippet = full_text[:4000]
+        spec = extract_instant_personality(snippet)
+        
+        s3 = _s3_client()
+        bucket = _bucket()
+        save_instant_personality_spec(user_id, spec, s3, bucket)
+        LOGGER.info("bootstrap_instant_persona_completed user_id=%s", user_id)
+    except Exception:
+        LOGGER.exception("bootstrap_instant_persona_failed user_id=%s", user_id)
+
+
 @app.post("/users/{user_id}/ingest")
-async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+async def ingest(user_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict[str, Any]:
     user_id = _validate_user_id(user_id)
     suffix = Path(file.filename or "upload.bin").suffix.lower()
     if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
@@ -347,9 +380,13 @@ async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
         path = Path(handle.name)
         handle.write(data)
     try:
-        return await ingest_file(user_id, str(path), file.filename)
+        res = await ingest_file(user_id, str(path), file.filename)
+        if res.get("status") == "completed":
+            background_tasks.add_task(_bootstrap_instant_persona, user_id)
+        return res
     finally:
         path.unlink(missing_ok=True)
+
 
 
 def _run_build(user_id: str, job_id: str) -> None:
@@ -394,11 +431,15 @@ def _run_build(user_id: str, job_id: str) -> None:
         build_knowledge_base(user_id, kb_texts, "build_pipeline")
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "fine_tuning", "status": "running"})
-        examples = generate_synthetic_conversations(spec, training_transcripts, n=20)
         fine_tune_job_id = None
         fine_tune_error = None
+        examples_count = 0
         try:
             from finetune.persona_finetune import save_adapter_id as _save_adapter_id, wait_for_finetune
+            examples = generate_synthetic_conversations(spec, training_transcripts, n=20)
+            examples_count = len(examples)
+            if not examples:
+                raise RuntimeError("No synthetic training examples were generated from the uploaded transcripts.")
             fine_tune_job_id = submit_finetune(user_id, examples, "initial")
             adapter_id = wait_for_finetune(fine_tune_job_id)
             _save_adapter_id(user_id, adapter_id, s3, bucket)
@@ -413,6 +454,7 @@ def _run_build(user_id: str, job_id: str) -> None:
                 "stage": "submitted",
                 "status": "completed",
                 "fine_tune_job_id": fine_tune_job_id,
+                "synthetic_examples_generated": examples_count,
                 "fallback_model_id": _base_model() if fine_tune_error else None,
                 "fine_tune_error": fine_tune_error,
             },
@@ -420,7 +462,16 @@ def _run_build(user_id: str, job_id: str) -> None:
     except Exception as exc:
         LOGGER.exception("build_failed user_id=%s job_id=%s", user_id, job_id)
         try:
-            _put_status(user_id, job_id, {"job_id": job_id, "stage": "failed", "status": "failed", "error": "Build pipeline failed. Check server logs."})
+            _put_status(
+                user_id,
+                job_id,
+                {
+                    "job_id": job_id,
+                    "stage": "failed",
+                    "status": "failed",
+                    "error": str(exc) or "Build pipeline failed. Check server logs.",
+                },
+            )
         except Exception:
             LOGGER.exception("put_status_failed_during_build_error user_id=%s job_id=%s", user_id, job_id)
 
@@ -449,30 +500,53 @@ async def build_status(user_id: str) -> dict[str, Any]:
 _ALLOWED_ROOM_DOMAINS = {"daily.co"}
 
 
+def _spawn_persona_bot(
+    user_id: str,
+    user_name: str,
+    room_url: str,
+    daily_token: str,
+    mode: str,
+) -> None:
+    def _runner() -> None:
+        try:
+            run_persona_bot(user_id, user_name, room_url, daily_token, mode=mode)
+        except Exception:
+            LOGGER.exception("persona_bot_launch_failed user_id=%s room_url=%s mode=%s", user_id, room_url, mode)
+
+    Thread(
+        target=_runner,
+        name=f"persona-bot-{user_id}-{mode}",
+        daemon=True,
+    ).start()
+
+
 @app.post("/join_room")
 async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
     user_id = _validate_user_id(request.user_id)
     parsed = urllib.parse.urlparse(request.room_url)
     if not any(parsed.netloc == d or parsed.netloc.endswith("." + d) for d in _ALLOWED_ROOM_DOMAINS):
         raise HTTPException(status_code=400, detail="Invalid room_url: must be a daily.co room")
-    _require_built_user(user_id)
-    background_tasks.add_task(
-        run_persona_bot,
+    if request.mode == "robust":
+        _require_built_user(user_id)
+    _spawn_persona_bot(
         user_id,
         request.user_name,
         request.room_url,
         request.daily_token,
+        mode=request.mode,
     )
     return {"status": "joining"}
 
 
 @app.post("/users/{user_id}/call", response_model=CallResponse)
-async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallResponse:
+async def call_agent(user_id: str, background_tasks: BackgroundTasks, mode: str = "robust") -> CallResponse:
     user_id = _validate_user_id(user_id)
-    _require_built_user(user_id)
+    if mode == "robust":
+        _require_built_user(user_id)
     daily = await _create_daily_room()
-    background_tasks.add_task(run_persona_bot, user_id, user_id, daily["room_url"], daily["token"])
+    _spawn_persona_bot(user_id, user_id, daily["room_url"], daily["token"], mode)
     return CallResponse(room_url=daily["room_url"], phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""))
+
 
 
 async def _twilio_inbound_response(request: Request, user_id: str) -> Response:
@@ -549,8 +623,19 @@ async def media_stream(websocket: WebSocket):
             ),
         )
 
-        spec = load_personality_spec(user_id, _s3_client(), _bucket())
-        initial_system_prompt = persona_system(user_id, spec, [])
+        mode = websocket.query_params.get("mode", "robust")
+
+        from prompts import zero_shot_system, instant_persona_system, persona_system
+        if mode == "zero_shot":
+            initial_system_prompt = zero_shot_system(user_id)
+            spec = {}
+        elif mode == "instant":
+            from personality.extractor import load_instant_personality_spec
+            spec = load_instant_personality_spec(user_id, _s3_client(), _bucket())
+            initial_system_prompt = instant_persona_system(user_id, spec)
+        else:
+            spec = load_personality_spec(user_id, _s3_client(), _bucket())
+            initial_system_prompt = persona_system(user_id, spec, [])
 
         llm = GeminiLiveLLMService(
             api_key=os.getenv("GEMINI_API_KEY"),
@@ -573,6 +658,11 @@ async def media_stream(websocket: WebSocket):
                 if not isinstance(frame, LLMContextFrame):
                     await self.push_frame(frame, direction)
                     return
+                
+                if mode != "robust":
+                    await self.push_frame(frame, direction)
+                    return
+
                 messages = [
                     {"role": m.get("role", ""), "content": m.get("content", "")}
                     for m in frame.context.get_messages()
@@ -734,8 +824,18 @@ async def vanguard_improve(user_id: str, background_tasks: BackgroundTasks) -> Q
             ) from exc
         raise
     persona_prompt = persona_system(user_id, personality_spec, [])
+    run_id = f"cycle_{cycle_number}_regression"
+    _vanguard_live_totals[run_id] = -1
+    _vanguard_live[run_id] = []
+
+    def _cleanup() -> None:
+        time.sleep(1200)
+        _vanguard_live.pop(run_id, None)
+        _vanguard_live_totals.pop(run_id, None)
+    Thread(target=_cleanup, daemon=True).start()
+
     background_tasks.add_task(run_improvement_cycle, user_id, full_run, persona_prompt, cycle_number)
-    return QueuedResponse(cycle_number=cycle_number, status="queued")
+    return QueuedResponse(cycle_number=cycle_number, run_id=run_id, status="queued")
 
 
 def _aggregate_pass_rate_by_persona(user_id: str) -> dict[str, dict[str, Any]]:
@@ -803,6 +903,7 @@ async def dashboard(user_id: str) -> dict[str, Any]:
         "pass_rate_history": [
             {
                 "cycle": item["cycle_number"],
+                "pass_rate_before": item.get("pass_rate_before"),
                 "pass_rate": item["pass_rate_after"],
                 "regression_passed": not item.get("regression_failed", False),
             }
@@ -822,6 +923,7 @@ async def get_user_status(user_id: str):
     """Returns real-time readiness status for a user."""
     user_id = _validate_user_id(user_id)
     personality_spec_ready = _key_exists(f"{user_id}/personality/personality_spec.json")
+    instant_spec_ready = _key_exists(f"{user_id}/personality/instant_spec.json")
     voice_runtime_ready = bool(os.getenv("GEMINI_API_KEY"))
 
     rag_ready = False
@@ -839,6 +941,7 @@ async def get_user_status(user_id: str):
 
     return {
         "personality_spec_ready": personality_spec_ready,
+        "instant_spec_ready": instant_spec_ready,
         "voice_runtime_ready": voice_runtime_ready,
         "voice_clone_ready": voice_runtime_ready,
         "rag_ready": rag_ready,
@@ -851,6 +954,7 @@ async def get_user_status(user_id: str):
 class ChatRequest(BaseModel):
     message: str
     user_id: str = "demo"
+    mode: str = "robust"
 
 
 @app.get("/users/{user_id}/transcript_scores")
@@ -866,9 +970,20 @@ async def transcript_scores(user_id: str) -> dict[str, Any]:
 async def chat(req: ChatRequest):
     user_id = _validate_user_id(req.user_id)
     _rate_limit("chat", user_id)
-    _require_built_user(user_id)
+    if req.mode == "robust":
+        _require_built_user(user_id)
     start = time.time()
-    system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, user_id, user_id, [], req.message)
+    
+    from prompts import zero_shot_system, instant_persona_system
+    if req.mode == "zero_shot":
+        system_prompt = zero_shot_system(user_id)
+    elif req.mode == "instant":
+        from personality.extractor import load_instant_personality_spec
+        spec = load_instant_personality_spec(user_id, _s3_client(), _bucket())
+        system_prompt = instant_persona_system(user_id, spec)
+    else:
+        system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, user_id, user_id, [], req.message)
+        
     client = openai.AsyncOpenAI(
         api_key=os.getenv("NVIDIA_API_KEY"),
         base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),

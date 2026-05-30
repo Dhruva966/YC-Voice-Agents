@@ -100,6 +100,8 @@ type Evaluation = {
   dimension_scores?:    DimensionScores;
   failure_annotations?: Array<Record<string, unknown>>;
   provider?:            string;
+  cekura_call_log_id?:  string | number;
+  cekura_url?:          string;
 };
 type TranscriptTurn = { role: string; text: string };
 type VanguardSession = {
@@ -121,7 +123,7 @@ type SystemStatus = {
   personality_spec_ready: boolean; instant_spec_ready: boolean; voice_clone_ready: boolean; rag_ready: boolean;
   vanguard_runs: number; improvement_cycles: number; attack_suite_size: number;
 };
-type PassRateHistoryItem = { cycle: number; pass_rate: number; regression_passed?: boolean };
+type PassRateHistoryItem = { cycle: number; pass_rate: number; pass_rate_before?: number; regression_passed?: boolean };
 type Dashboard = {
   latest_vanguard_run_summary?: VanguardRun | null;
   pass_rate_history?:           PassRateHistoryItem[];
@@ -160,6 +162,14 @@ type AttackSuiteItem = { session_id: string; attack_persona: string; status: str
 /* ─────────── Utils ──────────────────────────────────────── */
 function formatTime(ts: Date): string {
   return ts.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  const payload = await res.json().catch(() => null) as Record<string, unknown> | null;
+  if (typeof payload?.detail === "string") return payload.detail;
+  if (typeof payload?.error === "string") return payload.error;
+  if (typeof payload?.message === "string") return payload.message;
+  return fallback;
 }
 
 /* ─────────── Primitive button components ────────────────── */
@@ -696,6 +706,53 @@ export default function Page() {
   const robustnessDelta = priorPoint?.passRate != null ? Math.round(robustnessScore - priorPoint.passRate) : null;
   const projectedGoal = Math.max(95, robustnessScore);
 
+  const trajectoryPoints = useMemo(() => {
+    const points: { label: string; value: number }[] = [];
+    const passRates = dashboard.pass_rate_history || [];
+    if (passRates.length > 0) {
+      const first = passRates[0];
+      if (first.pass_rate_before != null) {
+        points.push({
+          label: "Run 1",
+          value: Math.round(first.pass_rate_before * 100),
+        });
+      }
+      passRates.forEach((item, index) => {
+        points.push({
+          label: `Run ${index + 2}`,
+          value: Math.round(item.pass_rate * 100),
+        });
+      });
+    } else {
+      if (robustnessScore > 0) {
+        points.push({
+          label: "Run 1",
+          value: robustnessScore,
+        });
+      }
+    }
+    return points;
+  }, [dashboard.pass_rate_history, robustnessScore]);
+
+  const hasCekuraCalls = sessions.some((session) => !!session.evaluation?.cekura_call_log_id);
+  const buildStepCards = useMemo(() => {
+    const cards = [
+      { key: "Ingest", label: "Ingest", match: ["ingest"] },
+      { key: "Transcribe", label: "Transcribe", match: ["transcrib"] },
+      { key: "Extract Personality", label: "Extract", match: ["personality"] },
+      { key: "Score Transcripts", label: "Score", match: ["scoring"] },
+      { key: "Configure Voice", label: "Configure", match: ["voice", "cloning_voice"] },
+      { key: "Build RAG", label: "RAG", match: ["rag"] },
+      { key: "Fine-tune", label: "Fine-tune", match: ["fine"] },
+    ];
+    return cards.map((card, index) => {
+      const done = completedSteps.includes(card.key) || (buildComplete && index <= BUILD_STEPS.indexOf(card.key));
+      const active = !done && !!buildStage && card.match.some((token) => buildStage.includes(token));
+      const pending = !done && !active;
+      return { ...card, done, active, pending };
+    });
+  }, [buildComplete, buildStage, completedSteps]);
+
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
     if (stage.includes("personality")) return 2;
@@ -765,10 +822,11 @@ export default function Page() {
         const body = new FormData();
         body.append("file", file);
         const res = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, withApiKey({ method: "POST", body }));
-        if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
+        if (!res.ok) throw new Error(await readErrorMessage(res, `Upload failed for ${file.name}`));
       }
       setCompletedSteps(["Ingest", "Transcribe"]);
       const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, withApiKey({ method: "POST" }));
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Build could not be started."));
       setBuildJobId((await res.json()).job_id);
       setFiles([]);
       if (ingestMode === "text") setRawTranscriptText("");
@@ -784,7 +842,7 @@ export default function Page() {
     const roomWindow = window.open("", "_blank", "noopener,noreferrer");
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/call?mode=robust`, withApiKey({ method: "POST" }));
-      if (!res.ok) throw new Error("Call agent failed");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Call agent failed"));
       const payload = await res.json();
       setCallInfo(payload);
       if (roomWindow && payload.room_url) {
@@ -805,7 +863,7 @@ export default function Page() {
         if (sr.ok) setAttackSuite(await sr.json());
       } catch { /* best-effort */ }
       const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, withApiKey({ method: "POST" }));
-      if (!res.ok) throw new Error("Launch attack failed");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Launch attack failed"));
       const payload = await res.json();
       setRunId(payload.run_id);
       setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
@@ -837,8 +895,13 @@ export default function Page() {
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, withApiKey({ method: "POST" }));
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error((d as Record<string, string>).detail || "Improvement cycle failed");
+        throw new Error(await readErrorMessage(res, "Improvement cycle failed"));
+      }
+      const data = await res.json();
+      if (data.run_id) {
+        setRunId(data.run_id);
+        setRun(null);
+        setExpandedGridSession(new Set());
       }
       improveStartCount.current = chartData.length;
       setImprovementRunning(true);
@@ -855,7 +918,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: chatMessage, user_id: USER_ID, mode: "robust" }),
       }));
-      if (!res.ok) throw new Error("Chat request failed");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Chat request failed"));
       const data = await res.json();
       setChatResponse(data.response); setChatLatency(data.latency_ms);
     } catch (e) { setError(String(e)); } finally { setChatLoading(false); }
@@ -885,6 +948,7 @@ export default function Page() {
         if (status.status === "completed")  BUILD_STEPS.forEach((s) => nxt.add(s));
         setCompletedSteps(Array.from(nxt));
         setBuildStage(status.stage);
+        if (status.status === "failed" && status.error) setError(status.error);
         if (status.status === "completed" || status.status === "failed") {
           window.clearInterval(timer); refreshDashboard(); fetchStatus();
           if (status.status === "completed") fetchTranscriptScores();
@@ -1276,6 +1340,35 @@ export default function Page() {
             })}
           </div>
 
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 8, marginBottom: 20 }}>
+            {buildStepCards.map((step) => (
+              <div
+                key={step.key}
+                style={{
+                  background: step.active ? "var(--clay-tint)" : "var(--surface)",
+                  border: `1px solid ${step.active ? "var(--clay)" : step.done ? "rgba(62,122,69,0.28)" : "var(--border)"}`,
+                  borderRadius: "var(--radius-sm)",
+                  padding: "10px 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 11, color: step.done ? "var(--ink)" : step.active ? "var(--clay-deep)" : "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                  {step.label}
+                </span>
+                {step.done ? (
+                  <CheckCircle2 size={13} color="var(--status-green)" />
+                ) : step.active ? (
+                  <Loader2 size={13} color="var(--clay-deep)" className="animate-spin" />
+                ) : (
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--border)" }} />
+                )}
+              </div>
+            ))}
+          </div>
+
           {/* Status grid */}
           {statusInfo && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 20 }}>
@@ -1470,7 +1563,7 @@ export default function Page() {
                 <Phone size={15} color="var(--status-green)" />
               </div>
               <div>
-                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Agent</h2>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Live Call</h2>
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Voice call interface · live chat test</p>
               </div>
             </div>
@@ -1746,7 +1839,7 @@ export default function Page() {
                   {robustnessScore}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>
-                  Latest measured adversarial pass rate. This is the headline metric we want to push from the 80s into the mid 90s.
+                  Latest measured adversarial pass rate. This is the headline metric we want to push towards 95%+.
                 </div>
               </div>
               <div className="forge-card">
@@ -1758,14 +1851,18 @@ export default function Page() {
                 </div>
               </div>
               <div className="forge-card">
-                <div className="forge-section-label">TARGET TRAJECTORY</div>
+                <div className="forge-section-label">HISTORICAL PROGRESSION</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                  {[80, 89, 91, 92, projectedGoal].map((value, index) => (
-                    <div key={`${value}-${index}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ color: "var(--ink-3)" }}>Run {index + 1}</span>
-                      <span style={{ color: value >= robustnessScore ? "var(--ink)" : "var(--status-green)", fontWeight: 700 }}>{value}%</span>
-                    </div>
-                  ))}
+                  {trajectoryPoints.length > 0 ? (
+                    trajectoryPoints.map((point) => (
+                      <div key={point.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--ink-3)" }}>{point.label}</span>
+                        <span style={{ color: "var(--status-green)", fontWeight: 700 }}>{point.value}%</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ color: "var(--ink-3)" }}>No runs recorded yet.</div>
+                  )}
                 </div>
               </div>
             </div>
