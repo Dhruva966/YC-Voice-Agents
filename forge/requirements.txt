@@ -4,7 +4,6 @@ boto3==1.34.0
 botocore==1.34.0
 langchain-text-splitters==1.1.1
 chromadb==1.5.9
-twilio==9.1.0
 openai==1.30.0
 httpx==0.27.0
 pipecat-ai[daily,google,openai,twilio]==1.3.0

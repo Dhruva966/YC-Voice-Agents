@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import tempfile
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -79,10 +80,18 @@ def _transcript_payload(path: Path, cleaned: str, filename: str) -> dict[str, An
     return None
 
 
+def _safe_filename(name: str) -> str:
+    """Strip path components and replace unsafe characters."""
+    base = Path(name).name
+    normalized = unicodedata.normalize("NFKD", base).encode("ascii", "ignore").decode()
+    safe = re.sub(r"[^\w.\-]", "_", normalized)
+    return safe or "upload"
+
+
 async def ingest_file(user_id: str, file_path: str, original_filename: str | None = None) -> dict[str, Any]:
     job_id = str(uuid.uuid4())
     path = Path(file_path)
-    filename = original_filename or path.name
+    filename = _safe_filename(original_filename or path.name)
     suffix = Path(filename).suffix.lower()
     s3 = _s3_client()
     bucket = _bucket()

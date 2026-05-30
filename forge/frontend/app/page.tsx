@@ -110,6 +110,14 @@ type DimensionScoreCard = {
   closing_technique: number;
 };
 
+const DIMENSION_LABELS: Record<string, string> = {
+  closing_technique: "Loan Knowledge",
+  objection_handling: "Objection Handling",
+  empathy: "Empathy",
+  naturalness: "Naturalness",
+  conversational_flow: "Conversational Flow",
+};
+
 type TranscriptScores = {
   aggregate_score: number;
   dimension_scores: DimensionScoreCard;
@@ -174,7 +182,7 @@ export default function Page() {
   const [completedSteps, setCompletedSteps] = useState<string[]>([]);
   const [buildJobId, setBuildJobId] = useState<string | null>(null);
   const [buildStage, setBuildStage] = useState<string | null>(null);
-  const [callInfo, setCallInfo] = useState<{ room_url: string; phone_number: string } | null>(null);
+  const [callInfo, setCallInfo] = useState<{ room_url: string } | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [run, setRun] = useState<VanguardRun | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>({});
@@ -197,6 +205,7 @@ export default function Page() {
   const [autoLoopCycle, setAutoLoopCycle] = useState(0);
   const [autoLoopRunning, setAutoLoopRunning] = useState(false);
   const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
+  const [nimMode, setNimMode] = useState<"self_hosted" | "cloud" | null>(null);
   const improvePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const improveStartCountRef = useRef(0);
   const autoLoopActiveRef = useRef(false);
@@ -273,6 +282,18 @@ export default function Page() {
     }
   }
 
+  async function fetchNimStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/health/nim`);
+      if (res.ok) {
+        const data = await res.json();
+        setNimMode(data.nim_mode === "self_hosted" ? "self_hosted" : "cloud");
+      }
+    } catch {
+      // silent fail
+    }
+  }
+
   async function fetchTranscriptScores() {
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/transcript_scores`);
@@ -286,6 +307,7 @@ export default function Page() {
     fetchStatus();
     refreshDashboard();
     fetchTranscriptScores();
+    fetchNimStatus();
     const statusTimer = setInterval(fetchStatus, 30000);
     const dashTimer = setInterval(refreshDashboard, 15000);
     return () => { clearInterval(statusTimer); clearInterval(dashTimer); };
@@ -727,14 +749,14 @@ export default function Page() {
               ) : (
                 <>
                   <span style={{ fontSize: 13, color: "#f4f4f5", display: "block", marginBottom: 4 }}>
-                    Drop audio, text, CSV, JSON, EML, or PDF files
+                    Drop recorded customer service calls (audio, CSV, JSON, EML, PDF, DOCX)
                   </span>
                   <span style={{ fontSize: 11, color: "#71717a" }}>or click to browse</span>
                 </>
               )}
             </label>
           </div>
-          <input id="file-input" className="sr-only" type="file" multiple accept="audio/*,.txt,.eml,.json,.csv,.pdf" onChange={(e: ChangeEvent<HTMLInputElement>) => {
+          <input id="file-input" className="sr-only" type="file" multiple accept="audio/*,.txt,.eml,.json,.csv,.pdf,.docx" onChange={(e: ChangeEvent<HTMLInputElement>) => {
             const incoming = Array.from(e.target.files || []);
             setFiles((prev) => [...prev, ...incoming]);
           }} />
@@ -874,7 +896,7 @@ export default function Page() {
                 {Object.entries(transcriptScores.dimension_scores).map(([dim, score]) => {
                   const pct = Math.round((score / 10) * 100);
                   const color = pct >= 70 ? "#22c55e" : pct >= 40 ? "#f59e0b" : "#ef4444";
-                  const label = dim.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                  const label = DIMENSION_LABELS[dim] ?? dim.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
                   return (
                     <div key={dim} style={{ background: "#0c0c0d", border: "1px solid #1f1f23", borderRadius: 6, padding: "8px 10px" }}>
                       <div style={{ fontSize: 10, color: "#71717a", marginBottom: 4 }}>{label}</div>
@@ -893,7 +915,10 @@ export default function Page() {
         {/* SECTION 2: AGENT */}
         <section id="agent" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Agent</h2>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Agent</h2>
+              <div style={{ fontSize: 11, color: "#71717a", marginTop: 2 }}>Loan officer agent — trained on your calls</div>
+            </div>
             <button
               onClick={callAgent}
               disabled={busy === "call"}
@@ -908,53 +933,48 @@ export default function Page() {
               Call Agent
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 11, color: "#71717a", marginBottom: 8 }}>Phone Number</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 20, fontFamily: "ui-monospace, SFMono-Regular, monospace", color: "#f4f4f5" }}>
-                  {callInfo?.phone_number || "—"}
-                </span>
-                {callInfo?.phone_number && (
-                  <button onClick={() => copyToClipboard(callInfo.phone_number, "phone")} style={{
-                    background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0,
-                  }}>
-                    <Copy size={14} />
-                    {copiedText === "phone" && <span style={{ fontSize: 10, color: "#22c55e", marginLeft: 4 }}>Copied!</span>}
-                  </button>
-                )}
-              </div>
-            </div>
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 11, color: "#71717a", marginBottom: 8 }}>Room URL</div>
+          <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 8 }}>Daily Room</div>
+            {callInfo?.room_url ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{
                   fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, monospace", color: "#f4f4f5",
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
                 }}>
-                  {callInfo?.room_url || "—"}
+                  {callInfo.room_url}
                 </span>
-                {callInfo?.room_url && (
-                  <>
-                    <button onClick={() => copyToClipboard(callInfo.room_url, "room")} style={{
-                      background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4,
-                    }}>
-                      <Copy size={14} />
-                      {copiedText === "room" && <span style={{ fontSize: 10, color: "#22c55e" }}>Copied!</span>}
-                    </button>
-                    <a href={callInfo.room_url} target="_blank" rel="noopener noreferrer" style={{
-                      display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#7c3aed", textDecoration: "none",
-                    }}>
-                      <Link size={14} /> Open
-                    </a>
-                  </>
-                )}
+                <button onClick={() => copyToClipboard(callInfo.room_url, "room")} style={{
+                  background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4,
+                }}>
+                  <Copy size={14} />
+                  {copiedText === "room" && <span style={{ fontSize: 10, color: "#22c55e" }}>Copied!</span>}
+                </button>
+                <a href={callInfo.room_url} target="_blank" rel="noopener noreferrer" style={{
+                  display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 500,
+                  background: "#7c3aed", color: "#fff", padding: "6px 12px", borderRadius: 6, textDecoration: "none",
+                }}>
+                  <Link size={13} /> Join Room
+                </a>
               </div>
-            </div>
+            ) : (
+              <span style={{ fontSize: 13, color: "#52525b" }}>Click &ldquo;Call Agent&rdquo; to create a room</span>
+            )}
           </div>
           {/* CHAT WIDGET */}
           <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 12 }}>Live chat test &mdash; real NVIDIA NIM response</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "#71717a" }}>Live chat test &mdash; real NVIDIA NIM response</div>
+              {nimMode && (
+                <span style={{
+                  fontSize: 10, fontWeight: 500, padding: "2px 8px", borderRadius: 4,
+                  background: nimMode === "self_hosted" ? "#052e16" : "#1c1917",
+                  color: nimMode === "self_hosted" ? "#22c55e" : "#f59e0b",
+                  border: `1px solid ${nimMode === "self_hosted" ? "#166534" : "#78350f"}`,
+                }}>
+                  NIM: {nimMode === "self_hosted" ? "Self-hosted" : "Cloud"}
+                </span>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <input
                 value={chatMessage}
@@ -962,7 +982,7 @@ export default function Page() {
                 onKeyDown={(e) => { if (e.key === "Enter") sendChat(); }}
                 onFocus={() => setChatFocused(true)}
                 onBlur={() => setChatFocused(false)}
-                placeholder="Type a message..."
+                placeholder="Ask about loan rates, requirements..."
                 style={{
                   flex: 1, background: "#0c0c0d", border: chatFocused ? "1px solid #7c3aed" : "1px solid #1f1f23", borderRadius: 4,
                   padding: "8px 12px", fontSize: 13, color: "#f4f4f5", outline: "none",

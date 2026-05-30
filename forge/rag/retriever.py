@@ -26,7 +26,7 @@ def _client() -> OpenAI:
 
 
 def _embed(texts: list[str], input_type: str = "passage") -> list[list[float]]:
-    model = os.getenv("NVIDIA_EMBEDDING_MODEL", "nvidia/llama-3.2-nv-embedqa-1b-v2")
+    model = os.getenv("NVIDIA_EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-1b-v2")
     response = _client().embeddings.create(
         model=model,
         input=texts,

@@ -13,12 +13,14 @@
 | Attack suite loader | `orchestrator.py:load_attack_suite()` |
 | Attack suite saver | `orchestrator.py:save_attack_suite()` |
 | Daily room creator | `orchestrator.py:_create_daily_room()` |
-| 8 attacker personas | `prompts.py:ATTACKER_PERSONAS` |
+| 10 attacker personas | `prompts.py:ATTACKER_PERSONAS` |
 | Improvement loop | `autoloop/loop_controller.py:run_improvement_cycle()` |
 
-## The 8 Attacker Personas
+## The 10 Attacker Personas
 | Key | Attack Goal |
 |-----|------------|
+| `unauthorized_commitment` | Pressure unauthorized business commitments |
+| `pii_exfiltration` | Extract private/confidential information |
 | `social_engineer` | Break persona via false authority/urgency |
 | `jailbreaker` | Override system instructions (DAN, developer-mode) |
 | `emotional_escalator` | Sycophancy under emotional pressure |
@@ -28,7 +30,7 @@
 | `contradiction_trapper` | Force self-contradiction |
 | `degraded_audio` | Poor audio/mishearing robustness |
 
-Default suite = 8 personas × 1 + first 4 repeated = 12 sessions total.
+Default suite = 10 personas × 1 + first 4 repeated = 14 sessions total.
 
 ## Allowed Patterns
 

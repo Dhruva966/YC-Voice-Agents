@@ -95,7 +95,13 @@ class _LocalS3Client:
         Path(Filename).write_bytes(obj["Body"].read())
 
     def generate_presigned_url(self, operation: str, Params: dict[str, Any] | None = None, **kwargs: Any) -> str:
-        """Return a file:// URL so local finetune submission can reference the JSONL."""
+        """Return a file:// URL for local dev reference.
+
+        NOTE: file:// URLs are only accessible on the local machine. NVIDIA's
+        customization API cannot reach them. Fine-tune submission will fail in
+        local mode unless NVIDIA_CUSTOMIZATION_BASE_URL is unset (which causes
+        submit_finetune() to raise before ever calling this method).
+        """
         if Params is None:
             Params = {}
         key = Params.get("Key", "")

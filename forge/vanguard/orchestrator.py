@@ -30,7 +30,6 @@ async def _create_daily_room(session_id: str) -> dict[str, str]:
                 "properties": {
                     "max_participants": 2,
                     "exp": int(time.time()) + 3600,
-                    "enable_recording": "cloud",
                 },
             },
         )
@@ -100,11 +99,13 @@ async def run_vanguard(
     attack_suite: list[dict[str, Any]],
     max_concurrent: int = 8,
     live_results: dict[str, list[dict[str, Any]]] | None = None,
+    live_key: str | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     semaphore = asyncio.Semaphore(max_concurrent)
+    _live_key = live_key or run_id
     if live_results is not None:
-        live_results[run_id] = []
+        live_results[_live_key] = []
 
     async def guarded(session: dict[str, Any]) -> dict[str, Any]:
         async with semaphore:
@@ -123,7 +124,7 @@ async def run_vanguard(
                     },
                 }
             if live_results is not None:
-                live_results[run_id].append(result)
+                live_results[_live_key].append(result)
             return result
 
     sessions = await asyncio.gather(*(guarded(session) for session in attack_suite))

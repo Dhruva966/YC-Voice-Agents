@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -18,37 +19,15 @@ import openai
 import httpx
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 from pydantic import BaseModel
-from twilio.request_validator import RequestValidator as _TwilioRequestValidator
-from twilio.twiml.voice_response import VoiceResponse
 
 load_dotenv()
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
-from pipecat.transports.websocket.fastapi import (
-    FastAPIWebsocketTransport,
-    FastAPIWebsocketParams,
-)
-from pipeline.persona_bot import (
-    DynamicPersonaContext,
-    build_initial_system_prompt,
-    build_dynamic_system_prompt,
-    rewrite_rag_query,
-)
-from rag.retriever import retrieve
 
-from pipecat.frames.frames import LLMContextFrame, LLMUpdateSettingsFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.settings import LLMSettings
-
+from pipeline.persona_bot import build_dynamic_system_prompt, run_persona_bot
 from storage import s3_client as _s3_client, bucket_name as _bucket
 from autoloop.loop_controller import run_improvement_cycle
 from finetune.persona_finetune import generate_synthetic_conversations, submit_finetune
@@ -60,7 +39,6 @@ from ingestion.pipeline import (
 )
 from ingestion.transcript_scorer import score_transcripts
 from personality.extractor import extract_personality, load_personality_spec, save_personality_spec
-from pipeline.persona_bot import run_persona_bot
 from prompts import persona_system
 from rag.retriever import build_knowledge_base, init_db
 from vanguard.orchestrator import load_attack_suite, run_vanguard
@@ -70,6 +48,13 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_NVIDIA_BASE_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
 _vanguard_live: dict[str, list[dict[str, Any]]] = {}
 _vanguard_live_totals: dict[str, int] = {}
+
+_USER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _validate_user_id(user_id: str) -> None:
+    if not _USER_ID_RE.match(user_id):
+        raise HTTPException(status_code=400, detail="Invalid user_id: must be 1-64 alphanumeric/underscore/hyphen characters")
 
 
 @asynccontextmanager
@@ -99,6 +84,20 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/health/nim")
+async def nim_health():
+    base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    is_self_hosted = not base_url.startswith("https://integrate.api.nvidia.com")
+    return {
+        "nim_mode": "self_hosted" if is_self_hosted else "cloud",
+        "nim_url": base_url,
+        "base_model": os.getenv("NVIDIA_BASE_MODEL", "meta/llama-4-maverick-17b-128e-instruct"),
+        "embedding_model": os.getenv("NVIDIA_EMBEDDING_MODEL", "nvidia/llama-3.2-nv-embedqa-1b-v2"),
+        "persona_model": os.getenv("NVIDIA_PERSONA_MODEL") or None,
+        "customization_url": os.getenv("NVIDIA_CUSTOMIZATION_BASE_URL") or None,
+    }
+
+
 class QueuedResponse(BaseModel):
     job_id: str | None = None
     run_id: str | None = None
@@ -108,7 +107,6 @@ class QueuedResponse(BaseModel):
 
 class CallResponse(BaseModel):
     room_url: str
-    phone_number: str
 
 
 class JoinRoomRequest(BaseModel):
@@ -120,15 +118,6 @@ class JoinRoomRequest(BaseModel):
 
 def _base_model() -> str:
     return os.getenv("NVIDIA_BASE_MODEL") or DEFAULT_NVIDIA_BASE_MODEL
-
-
-def _twilio_stream_url(request: Request) -> str:
-    configured = os.getenv("TWILIO_STREAM_URL") or os.getenv("WSS_BASE_URL")
-    if configured:
-        return configured.rstrip("/")
-
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    return f"wss://{host}/media-stream"
 
 
 def _put_status(user_id: str, job_id: str, payload: dict[str, Any]) -> None:
@@ -201,6 +190,7 @@ async def _create_daily_room(name: str | None = None) -> dict[str, str]:
 
 @app.post("/users/{user_id}/ingest")
 async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    _validate_user_id(user_id)
     suffix = Path(file.filename or "upload.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
         path = Path(handle.name)
@@ -277,6 +267,7 @@ def _run_build(user_id: str, job_id: str) -> None:
 
 @app.post("/users/{user_id}/build", response_model=QueuedResponse)
 async def build(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
+    _validate_user_id(user_id)
     job_id = str(uuid.uuid4())
     _put_status(user_id, job_id, {"job_id": job_id, "stage": "queued", "status": "queued"})
     background_tasks.add_task(_run_build, user_id, job_id)
@@ -307,148 +298,30 @@ async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks)
 
 @app.post("/users/{user_id}/call", response_model=CallResponse)
 async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallResponse:
+    _validate_user_id(user_id)
     daily = await _create_daily_room()
     background_tasks.add_task(run_persona_bot, user_id, user_id, daily["room_url"], daily["token"])
-    return CallResponse(room_url=daily["room_url"], phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""))
-
-
-@app.post("/webhook/twilio/inbound")
-async def twilio_inbound(request: Request) -> Response:
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    if auth_token:
-        validator = _TwilioRequestValidator(auth_token)
-        signature = request.headers.get("X-Twilio-Signature", "")
-        url = str(request.url)
-        form_data = dict(await request.form())
-        if not validator.validate(url, form_data, signature):
-            LOGGER.warning("twilio_signature_validation_failed url=%s", url)
-            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
-    twiml = VoiceResponse()
-    connect = twiml.connect()
-    connect.stream(url=_twilio_stream_url(request))
-    return Response(content=str(twiml), media_type="application/xml")
-
-
-@app.websocket("/media-stream")
-async def media_stream(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-        data = json.loads(raw)
-        attempts = 0
-        while data.get("event") != "start":
-            attempts += 1
-            if attempts > 50:
-                LOGGER.warning("media_stream_no_start_event")
-                await websocket.close(code=1002)
-                return
-            raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-            data = json.loads(raw)
-        stream_sid = data["start"]["streamSid"]
-        serializer = TwilioFrameSerializer(stream_sid=stream_sid)
-        transport = FastAPIWebsocketTransport(
-            websocket=websocket,
-            params=FastAPIWebsocketParams(
-                serializer=serializer,
-                audio_in_enabled=True,
-                audio_out_enabled=True,
-                vad_analyzer=SileroVADAnalyzer(),
-            ),
-        )
-
-        spec = load_personality_spec("demo", _s3_client(), _bucket())
-        initial_system_prompt = persona_system("demo", spec, [])
-
-        llm = GeminiLiveLLMService(
-            api_key=os.getenv("GEMINI_API_KEY"),
-            settings=GeminiLiveLLMService.Settings(
-                model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
-                voice=os.getenv("GEMINI_VOICE", "Puck"),
-                system_instruction=initial_system_prompt,
-            ),
-        )
-
-        context = DynamicPersonaContext(initial_system_prompt)
-
-        class _TwilioDynamicUpdater(FrameProcessor):
-            def __init__(self, personality_spec):
-                super().__init__()
-                self._personality_spec = personality_spec
-
-            async def process_frame(self, frame, direction: FrameDirection):
-                await super().process_frame(frame, direction)
-                if not isinstance(frame, LLMContextFrame):
-                    await self.push_frame(frame, direction)
-                    return
-                messages = [
-                    {"role": m.get("role", ""), "content": m.get("content", "")}
-                    for m in frame.context.get_messages()
-                    if isinstance(m, dict) and m.get("role") in {"user", "assistant"}
-                ]
-                latest_idx = next(
-                    (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"),
-                    None,
-                )
-                utterance = messages[latest_idx]["content"] if latest_idx is not None else ""
-                history = messages[:latest_idx] if latest_idx is not None else messages
-                try:
-                    query = await asyncio.to_thread(rewrite_rag_query, history, utterance)
-                    chunks = await asyncio.to_thread(retrieve, "demo", query, 5)
-                    prompt = persona_system("demo", self._personality_spec, chunks)
-                except Exception:
-                    prompt = initial_system_prompt
-                await self.push_frame(
-                    LLMUpdateSettingsFrame(
-                        delta=LLMSettings(system_instruction=prompt),
-                        service=llm,
-                    ),
-                    direction,
-                )
-                await self.push_frame(frame, direction)
-
-        pipeline = Pipeline([
-            transport.input(),
-            context.user(),
-            _TwilioDynamicUpdater(spec),
-            llm,
-            transport.output(),
-            context.assistant(),
-        ])
-        task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
-
-        @transport.event_handler("on_client_disconnected")
-        async def on_client_disconnected(transport, client):
-            await task.cancel()
-
-        runner = PipelineRunner(handle_sigint=False)
-        await runner.run(task)
-    except WebSocketDisconnect:
-        LOGGER.info("media_stream_client_disconnected")
-    except Exception:
-        LOGGER.exception("media_stream_error")
-        try:
-            await websocket.close(code=1011)
-        except Exception:
-            pass
+    return CallResponse(room_url=daily["room_url"])
 
 
 def _run_vanguard_background(user_id: str, run_id: str) -> None:
     import threading
     suite = load_attack_suite(user_id)
-    _vanguard_live[run_id] = []
-    _vanguard_live_totals[run_id] = len(suite)
+    live_key = f"{user_id}:{run_id}"
+    _vanguard_live[live_key] = []
+    _vanguard_live_totals[live_key] = len(suite)
     persona_agent_url = os.getenv("PERSONA_AGENT_URL", "http://localhost:8000")
-    asyncio.run(run_vanguard(user_id, run_id, persona_agent_url, suite, live_results=_vanguard_live))
-    # Clean up in-memory results after 5 minutes (enough for frontend to finish polling)
+    asyncio.run(run_vanguard(user_id, run_id, persona_agent_url, suite, live_results=_vanguard_live, live_key=live_key))
     def _cleanup() -> None:
         time.sleep(300)
-        _vanguard_live.pop(run_id, None)
-        _vanguard_live_totals.pop(run_id, None)
+        _vanguard_live.pop(live_key, None)
+        _vanguard_live_totals.pop(live_key, None)
     threading.Thread(target=_cleanup, daemon=True).start()
 
 
 @app.post("/users/{user_id}/vanguard/run", response_model=QueuedResponse)
 async def vanguard_run(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
+    _validate_user_id(user_id)
     run_id = str(uuid.uuid4())
     background_tasks.add_task(_run_vanguard_background, user_id, run_id)
     return QueuedResponse(run_id=run_id, status="queued")
@@ -481,8 +354,9 @@ async def vanguard_run_result(user_id: str, run_id: str) -> dict[str, Any]:
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}/live")
 async def vanguard_run_live(user_id: str, run_id: str) -> dict[str, Any]:
-    sessions = list(_vanguard_live.get(run_id, []))
-    expected = _vanguard_live_totals.get(run_id)
+    live_key = f"{user_id}:{run_id}"
+    sessions = list(_vanguard_live.get(live_key, []))
+    expected = _vanguard_live_totals.get(live_key)
     complete = expected is not None and len(sessions) >= expected
     return {"sessions": sessions, "complete": complete, "total": len(sessions), "expected_total": expected or 0}
 
@@ -494,6 +368,7 @@ async def get_attack_suite(user_id: str) -> list[dict[str, Any]]:
 
 @app.post("/users/{user_id}/vanguard/improve", response_model=QueuedResponse)
 async def vanguard_improve(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
+    _validate_user_id(user_id)
     runs = await vanguard_runs(user_id)
     if not runs:
         raise HTTPException(status_code=400, detail="No Vanguard runs found")
@@ -594,51 +469,56 @@ async def dashboard(user_id: str) -> dict[str, Any]:
 @app.get("/users/{user_id}/status")
 async def get_user_status(user_id: str):
     """Returns real-time readiness status for a user."""
-    from pathlib import Path
+    s3 = _s3_client()
+    bucket = _bucket()
 
-    local_data = Path("local_data") / user_id
+    def _key_exists(key: str) -> bool:
+        try:
+            s3.head_object(Bucket=bucket, Key=key)
+            return True
+        except ClientError:
+            return False
 
-    # personality_spec_ready
-    spec_path = local_data / "personality" / "personality_spec.json"
-    personality_spec_ready = spec_path.exists()
+    personality_spec_ready = _key_exists(f"{user_id}/personality/personality_spec.json")
+    voice_clone_ready = _key_exists(f"{user_id}/voice_id.txt") or bool(os.getenv("GEMINI_API_KEY"))
 
-    # Gemini Live is the runtime voice path; ElevenLabs voice_id.txt is legacy/optional.
-    voice_path = local_data / "voice_id.txt"
-    voice_clone_ready = voice_path.exists() or bool(os.getenv("GEMINI_API_KEY"))
-
-    # rag_ready - check ChromaDB collection
+    # RAG lives in ChromaDB locally or pgvector on AWS — check via the retriever
     rag_ready = False
     try:
-        import chromadb
-        chroma_path = os.getenv("LOCAL_CHROMA_DIR", "./local_data/chroma")
-        client = chromadb.PersistentClient(path=chroma_path)
-        collection_names = [c.name for c in client.list_collections()]
-        rag_ready = f"user_{user_id}" in collection_names
+        from rag.retriever import _use_local, _get_chroma
+        if _use_local():
+            chroma_names = [c.name for c in _get_chroma().list_collections()]
+            rag_ready = f"user_{user_id}" in chroma_names
+        else:
+            from rag.retriever import _get_pool
+            from contextlib import contextmanager
+            pool = _get_pool()
+            conn = pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM knowledge_chunks WHERE user_id = %s LIMIT 1",
+                        (user_id,),
+                    )
+                    rag_ready = cur.fetchone() is not None
+                conn.commit()
+            finally:
+                pool.putconn(conn)
     except Exception:
         pass
 
-    # vanguard_runs - count files in local_data/{user_id}/vanguard_runs/
-    vanguard_dir = local_data / "vanguard_runs"
-    vanguard_runs = 0
-    if vanguard_dir.exists():
-        vanguard_runs = len(list(vanguard_dir.glob("*.json")))
+    vanguard_keys = _list_keys(f"{user_id}/vanguard_runs/")
+    vanguard_runs = sum(1 for k in vanguard_keys if k.endswith(".json"))
 
-    # improvement_cycles - count files
-    cycles_dir = local_data / "improvement_cycles"
-    improvement_cycles = 0
-    if cycles_dir.exists():
-        improvement_cycles = len(list(cycles_dir.glob("*.json")))
+    cycle_keys = _list_keys(f"{user_id}/improvement_cycles/")
+    improvement_cycles = sum(1 for k in cycle_keys if k.endswith(".json"))
 
-    # attack_suite_size - read attack_suite.json
     attack_suite_size = 0
-    suite_path = local_data / "attack_suite.json"
-    if suite_path.exists():
-        try:
-            import json as _json
-            suite = _json.loads(suite_path.read_text())
-            attack_suite_size = len(suite)
-        except Exception:
-            pass
+    try:
+        body = s3.get_object(Bucket=bucket, Key=f"{user_id}/attack_suite.json")["Body"].read()
+        attack_suite_size = len(json.loads(body.decode("utf-8")))
+    except Exception:
+        pass
 
     return {
         "personality_spec_ready": personality_spec_ready,

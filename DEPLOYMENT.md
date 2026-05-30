@@ -161,6 +161,42 @@ Postgres credentials before you add production RDS settings.
 
 ---
 
+## Partner Hand-Off (NVIDIA GPU Infra)
+
+When your NVIDIA infrastructure partner delivers the self-hosted NIM server, update `forge/.env`:
+
+```env
+# Replace cloud NIM with self-hosted EC2 NIM
+NVIDIA_BASE_URL=http://<partner-ec2-ip>:8000/v1
+NVIDIA_BASE_MODEL=meta/llama-3.1-70b-instruct
+NVIDIA_CUSTOMIZATION_BASE_URL=http://<partner-ec2-ip>:8001
+
+# After first fine-tune run, partner will provide:
+NVIDIA_PERSONA_MODEL=meta/llama-3.1-70b-instruct@forge-persona
+```
+
+**Validate the switch worked:**
+```bash
+# 1. Check which NIM is active
+curl http://localhost:8000/health/nim
+# → "nim_mode": "self_hosted"
+
+# 2. Run NIM inference test
+cd forge && make test-nim
+# → NIM OK: ...
+
+# 3. Run embedding test
+cd forge && make test-embed
+# → Embedding dim: 1024
+
+# 4. Full env check
+cd forge && make check-env
+```
+
+No code changes needed — all NVIDIA clients read from env vars.
+
+---
+
 ## Pre-Demo Checklist
 
 Run this sequence Thursday/Friday before the hackathon:
@@ -198,13 +234,13 @@ cp -r local_data/ local_data_backup/
 
 ## Demo Video Flow
 
-1. **Skit** (~30s): Funny example sales call — one person plays customer, one plays agent
+1. **Skit** (~30s): Funny example banking call — caller asks about a loan application, agent stumbles
 2. **Fast-forward** (~15s): Grid of 100 simultaneous calls playing at once
-3. **Transcript dump** (~20s): Drag all transcripts into the Forge dashboard
+3. **Transcript dump** (~20s): Upload recorded customer service calls into the Forge dashboard
 4. **Build pipeline** (~30s): Watch the stepper light up — Extract → Score (show quality scores per transcript) → RAG → Fine-tune
-5. **Live call** (~45s): Call the Twilio number live on camera — talk to the trained agent
+5. **Live call** (~45s): Call the Twilio number live on camera — talk to the trained loan officer agent
 6. **Vanguard** (~15s): Brief clip of adversarial sessions running + resilience score
-7. **Close** (~10s): Show the webhook URL — "Paste this. Done."
+7. **Close** (~10s): Show the webhook URL — "Paste this webhook URL into your bank's call routing. Done."
 
 ---
 

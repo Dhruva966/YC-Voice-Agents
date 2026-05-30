@@ -10,11 +10,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+import logging
+
 import httpx
 from openai import OpenAI
 
 from storage import s3_client as _s3_client, bucket_name as _bucket
 from prompts import synthetic_conversation
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_NVIDIA_BASE_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
 
@@ -90,7 +94,7 @@ def generate_synthetic_conversations(
         except ValueError:
             continue
         if (index + 1) % 50 == 0:
-            print(f"Generated {index + 1}/{n} synthetic conversations")
+            LOGGER.info("synthetic_conversations_generated %d/%d", index + 1, n)
     return examples
 
 
@@ -182,13 +186,17 @@ def _completed_model(job_id: str, payload: Any) -> str:
     return base_model
 
 
+_FINETUNE_TIMEOUT_SECONDS = int(os.getenv("FINETUNE_POLL_TIMEOUT_SECONDS", str(4 * 3600)))
+
+
 def wait_for_finetune(job_id: str, poll_interval: int = 60) -> str:
     """Poll for NVIDIA fine-tune completion (blocking). Prefer wait_for_finetune_async in async contexts."""
     base_url = os.getenv("NVIDIA_CUSTOMIZATION_BASE_URL")
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
 
-    while True:
+    deadline = time.monotonic() + _FINETUNE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
         response = httpx.get(
             f"{base_url.rstrip('/')}/customizations/{job_id}",
             headers={"Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}"},
@@ -202,6 +210,7 @@ def wait_for_finetune(job_id: str, poll_interval: int = 60) -> str:
         if status in {"failed", "cancelled", "canceled"}:
             raise RuntimeError(f"Fine-tune {job_id} ended with status {status}: {payload}")
         time.sleep(poll_interval)
+    raise TimeoutError(f"Fine-tune {job_id} did not complete within {_FINETUNE_TIMEOUT_SECONDS}s")
 
 
 async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
@@ -210,8 +219,10 @@ async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
 
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _FINETUNE_TIMEOUT_SECONDS
     async with httpx.AsyncClient(timeout=60) as client:
-        while True:
+        while loop.time() < deadline:
             response = await client.get(
                 f"{base_url.rstrip('/')}/customizations/{job_id}",
                 headers={"Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}"},
@@ -224,6 +235,7 @@ async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
             if status in {"failed", "cancelled", "canceled"}:
                 raise RuntimeError(f"Fine-tune {job_id} ended with status {status}: {payload}")
             await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"Fine-tune {job_id} did not complete within {_FINETUNE_TIMEOUT_SECONDS}s")
 
 
 def save_adapter_id(user_id: str, adapter_id: str, s3_client, bucket: str) -> str:

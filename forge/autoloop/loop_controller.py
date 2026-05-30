@@ -81,7 +81,8 @@ def run_improvement_cycle(
         )
         annotation = _call_json_prompt(prompt)
         annotations.append(annotation)
-        history = _conversation_history_until_failure(session.get("transcript", {}), int(annotation.get("failure_turn", 0)))
+        failure_turn = max(1, int(annotation.get("failure_turn") or 0))
+        history = _conversation_history_until_failure(session.get("transcript", {}), failure_turn)
         examples.append(
             finetune_example_formatter(
                 persona_system_prompt,
@@ -90,13 +91,14 @@ def run_improvement_cycle(
             )
         )
 
-    adapter_id = _base_model()
+    adapter_id = None
     if examples:
         try:
             fine_tune_job_id = submit_finetune(user_id, examples, job_type=f"persona_cycle_{cycle_number}")
             adapter_id = asyncio.run(wait_for_finetune_async(fine_tune_job_id))
         except Exception:
             LOGGER.exception("fine_tune_failed_using_base_model")
+            adapter_id = None
     else:
         LOGGER.info("no_failed_sessions_to_fine_tune")
 
@@ -125,7 +127,7 @@ def run_improvement_cycle(
 
     suite = load_attack_suite(user_id)
     old_size = len(suite)
-    for session in regression.get("sessions", []):
+    for session in (s for s in regression.get("sessions", []) if s.get("status") == "passed"):
         original = ATTACKER_PERSONAS.get(session.get("attack_persona", ""), "")
         prompt = harder_variant_generator(
             original,

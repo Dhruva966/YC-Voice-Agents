@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
+_model_lock = threading.Lock()
+_model_cache: dict[str, Any] = {}
+
+
+def _get_model(model_size: str):
+    from faster_whisper import WhisperModel
+    with _model_lock:
+        if model_size not in _model_cache:
+            _model_cache[model_size] = WhisperModel(model_size, device="auto", compute_type="auto")
+        return _model_cache[model_size]
+
 
 def transcribe_audio(audio_path: str | Path, model_size: str | None = None) -> dict[str, Any]:
-    from faster_whisper import WhisperModel
-
     model_size = model_size or os.getenv("WHISPER_MODEL_SIZE", "base")
-    model = WhisperModel(model_size, device="auto", compute_type="auto")
+    model = _get_model(model_size)
     segments, info = model.transcribe(
         str(audio_path),
         vad_filter=True,
