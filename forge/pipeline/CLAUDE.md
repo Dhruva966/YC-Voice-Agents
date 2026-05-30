@@ -63,13 +63,14 @@ class _DynamicPersonaUpdater(FrameProcessor):
 
 ✅ **Pipeline order (Gemini Live — no separate STT/TTS):**
 ```python
+context_aggregator = LLMContextAggregatorPair(context, realtime_service_mode=True)
 pipeline = Pipeline([
     transport.input(),
-    context.user(),
+    context_aggregator.user(),
     _DynamicPersonaUpdater(spec),
     llm,           # GeminiLiveLLMService handles audio in → audio out
     transport.output(),
-    context.assistant(),
+    context_aggregator.assistant(),
 ])
 ```
 
