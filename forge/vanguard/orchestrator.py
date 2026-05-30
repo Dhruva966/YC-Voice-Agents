@@ -46,9 +46,8 @@ async def _create_daily_room(session_id: str) -> dict[str, str]:
             json={
                 "name": session_id,
                 "properties": {
-                    "max_participants": 2,
+                    "max_participants": 4,
                     "exp": int(time.time()) + 3600,
-                    "enable_recording": "cloud",
                 },
             },
         )
