@@ -76,7 +76,7 @@ def run_attacker_bot(
 
     # Use a different voice from the persona bot so they sound distinct
     attacker_voice = os.getenv("ATTACKER_GEMINI_VOICE", "Charon")
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
 
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GEMINI_API_KEY"),
@@ -88,7 +88,7 @@ def run_attacker_bot(
     )
 
     context = LLMContext()
-    context_aggregator = LLMContextAggregatorPair(context, realtime_service_mode=True)
+    context_aggregator = LLMContextAggregatorPair(context)
     user_aggregator = context_aggregator.user()
     assistant_aggregator = context_aggregator.assistant()
 

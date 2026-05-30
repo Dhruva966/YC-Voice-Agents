@@ -301,7 +301,230 @@ async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallRes
     _validate_user_id(user_id)
     daily = await _create_daily_room()
     background_tasks.add_task(run_persona_bot, user_id, user_id, daily["room_url"], daily["token"])
-    return CallResponse(room_url=daily["room_url"])
+    return CallResponse(room_url=daily["room_url"], phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""))
+
+
+async def _twilio_inbound_response(request: Request, user_id: str) -> Response:
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if auth_token:
+        validator = _TwilioRequestValidator(auth_token)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        url = str(request.url)
+        form_data = dict(await request.form())
+        if not validator.validate(url, form_data, signature):
+            LOGGER.warning("twilio_signature_validation_failed url=%s", url)
+            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+    twiml = VoiceResponse()
+    connect = twiml.connect()
+    connect.stream(url=_twilio_stream_url(request, user_id))
+    return Response(content=str(twiml), media_type="application/xml")
+
+
+@app.post("/webhook/twilio/inbound")
+async def twilio_inbound(request: Request) -> Response:
+    return await _twilio_inbound_response(request, "demo")
+
+
+@app.post("/users/{user_id}/webhook/twilio/inbound")
+async def twilio_inbound_for_user(user_id: str, request: Request) -> Response:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
+    return await _twilio_inbound_response(request, user_id)
+
+
+class NvidiaCallResponse(BaseModel):
+    room_url: str
+
+
+@app.post("/users/{user_id}/call/nvidia", response_model=NvidiaCallResponse)
+async def call_agent_nvidia(user_id: str, background_tasks: BackgroundTasks) -> NvidiaCallResponse:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
+    daily = await _create_daily_room()
+    background_tasks.add_task(
+        run_persona_bot_nvidia_daily,
+        user_id, user_id, daily["room_url"], daily["token"],
+    )
+    return NvidiaCallResponse(room_url=daily["room_url"])
+
+
+async def _twilio_nvidia_inbound_response(request: Request, user_id: str) -> Response:
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if auth_token:
+        validator = _TwilioRequestValidator(auth_token)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        url = str(request.url)
+        form_data = dict(await request.form())
+        if not validator.validate(url, form_data, signature):
+            LOGGER.warning("twilio_nvidia_signature_validation_failed url=%s", url)
+            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+    twiml = VoiceResponse()
+    connect = twiml.connect()
+    connect.stream(url=_twilio_nvidia_stream_url(request, user_id))
+    return Response(content=str(twiml), media_type="application/xml")
+
+
+@app.post("/webhook/twilio/nvidia")
+async def twilio_nvidia_inbound(request: Request) -> Response:
+    return await _twilio_nvidia_inbound_response(request, "demo")
+
+
+@app.post("/users/{user_id}/webhook/twilio/nvidia")
+async def twilio_nvidia_inbound_for_user(user_id: str, request: Request) -> Response:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
+    return await _twilio_nvidia_inbound_response(request, user_id)
+
+@app.websocket("/media-stream")
+async def media_stream(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        user_id = _validate_user_id(websocket.query_params.get("user_id", "demo"))
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+        data = json.loads(raw)
+        attempts = 0
+        while data.get("event") != "start":
+            attempts += 1
+            if attempts > 50:
+                LOGGER.warning("media_stream_no_start_event")
+                await websocket.close(code=1002)
+                return
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            data = json.loads(raw)
+        stream_sid = data["start"]["streamSid"]
+        serializer = TwilioFrameSerializer(stream_sid=stream_sid)
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                serializer=serializer,
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                vad_analyzer=SileroVADAnalyzer(),
+            ),
+        )
+
+        spec = load_personality_spec(user_id, _s3_client(), _bucket())
+        initial_system_prompt = persona_system(user_id, spec, [])
+
+        llm = GeminiLiveLLMService(
+            api_key=os.getenv("GEMINI_API_KEY"),
+            settings=GeminiLiveLLMService.Settings(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"),
+                voice=os.getenv("GEMINI_VOICE", "Puck"),
+                system_instruction=initial_system_prompt,
+            ),
+        )
+
+        context = DynamicPersonaContext(initial_system_prompt)
+
+        class _TwilioDynamicUpdater(FrameProcessor):
+            def __init__(self, personality_spec):
+                super().__init__()
+                self._personality_spec = personality_spec
+
+            async def process_frame(self, frame, direction: FrameDirection):
+                await super().process_frame(frame, direction)
+                if not isinstance(frame, LLMContextFrame):
+                    await self.push_frame(frame, direction)
+                    return
+                messages = [
+                    {"role": m.get("role", ""), "content": m.get("content", "")}
+                    for m in frame.context.get_messages()
+                    if isinstance(m, dict) and m.get("role") in {"user", "assistant"}
+                ]
+                latest_idx = next(
+                    (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"),
+                    None,
+                )
+                utterance = messages[latest_idx]["content"] if latest_idx is not None else ""
+                history = messages[:latest_idx] if latest_idx is not None else messages
+                try:
+                    query = await asyncio.to_thread(rewrite_rag_query, history, utterance)
+                    chunks = await asyncio.to_thread(retrieve, user_id, query, 5)
+                    prompt = persona_system(user_id, self._personality_spec, chunks)
+                except Exception:
+                    prompt = initial_system_prompt
+                await self.push_frame(
+                    LLMUpdateSettingsFrame(
+                        delta=LLMSettings(system_instruction=prompt),
+                        service=llm,
+                    ),
+                    direction,
+                )
+                await self.push_frame(frame, direction)
+
+        pipeline = Pipeline([
+            transport.input(),
+            context.user(),
+            _TwilioDynamicUpdater(spec),
+            llm,
+            transport.output(),
+            context.assistant(),
+        ])
+        task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
+
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport, client):
+            await task.cancel()
+
+        runner = PipelineRunner(handle_sigint=False)
+        await runner.run(task)
+    except WebSocketDisconnect:
+        LOGGER.info("media_stream_client_disconnected")
+    except Exception:
+        LOGGER.exception("media_stream_error")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
+
+@app.websocket("/media-stream-nvidia")
+async def media_stream_nvidia(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+        data = json.loads(raw)
+        attempts = 0
+        while data.get("event") != "start":
+            attempts += 1
+            if attempts > 50:
+                LOGGER.warning("media_stream_nvidia_no_start_event")
+                await websocket.close(code=1002)
+                return
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            data = json.loads(raw)
+        stream_sid = data["start"]["streamSid"]
+        call_sid = data["start"].get("callSid", "")
+        # Resolve user_id from callSid or fall back to "demo"
+        user_id = data["start"].get("customParameters", {}).get("user_id", "demo")
+        try:
+            user_id = _validate_user_id(user_id)
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
+        from pipecat.serializers.twilio import TwilioFrameSerializer
+        from pipecat.transports.websocket.fastapi import (
+            FastAPIWebsocketTransport, FastAPIWebsocketParams,
+        )
+        serializer = TwilioFrameSerializer(stream_sid=stream_sid)
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                serializer=serializer,
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+            ),
+        )
+        await run_persona_bot_nvidia_twilio(transport, user_id, user_id, stream_sid)
+    except WebSocketDisconnect:
+        LOGGER.info("media_stream_nvidia_disconnected")
+    except Exception:
+        LOGGER.exception("media_stream_nvidia_error")
 
 
 def _run_vanguard_background(user_id: str, run_id: str) -> None:

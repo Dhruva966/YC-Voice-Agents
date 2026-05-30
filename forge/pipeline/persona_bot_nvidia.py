@@ -138,9 +138,30 @@ async def _build_nvidia_pipeline(
         ),
     )
 
-    @transport.event_handler("on_client_connected")
+    @transport.event_handler("on_client_connected")  # Twilio/WebSocket path
     async def on_client_connected(transport, client):
+        from pipecat.frames.frames import LLMRunFrame
         LOGGER.info("nvidia_client_connected")
+        context.add_message({
+            "role": "user",
+            "content": "[Call connected. Greet the caller warmly and introduce yourself as their voice agent.]"
+        })
+        await worker.queue_frames([LLMRunFrame()])
+
+    @transport.event_handler("on_first_participant_joined")  # Daily path
+    async def on_first_participant_joined(transport, participant):
+        from pipecat.frames.frames import LLMRunFrame
+        LOGGER.info("nvidia_first_participant_joined")
+        context.add_message({
+            "role": "user",
+            "content": "[Call connected. Greet the caller warmly and introduce yourself as their voice agent.]"
+        })
+        await worker.queue_frames([LLMRunFrame()])
+
+    @transport.event_handler("on_participant_left")
+    async def on_participant_left(transport, participant, reason):
+        LOGGER.info("nvidia_participant_left reason=%s", reason)
+        await worker.cancel()
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
