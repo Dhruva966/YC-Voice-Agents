@@ -22,7 +22,6 @@ const firaCode = Fira_Code({
 });
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const USER_ID  = "demo";
 
 const BUILD_STEPS = [
   "Ingest",
@@ -558,6 +557,7 @@ function VanguardGrid({
  *  MAIN PAGE                                                *
  * ═════════════════════════════════════════════════════════ */
 export default function Page() {
+  const [userId,              setUserId]              = useState("demo");
   const [activeSection,       setActiveSection]       = useState("build");
   const [files,               setFiles]               = useState<File[]>([]);
   const [isDragging,          setIsDragging]          = useState(false);
@@ -665,21 +665,39 @@ export default function Page() {
   /* ── API helpers ─────────────────────────────────────── */
   async function fetchStatus() {
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/status`);
+      if (!userId) return;
+      const res = await fetch(`${API_BASE}/users/${userId}/status`);
       if (res.ok) { setStatusInfo(await res.json()); setLastUpdated(new Date()); }
     } catch { /* silent */ }
   }
   async function refreshDashboard() {
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/dashboard`);
+      if (!userId) return;
+      const res = await fetch(`${API_BASE}/users/${userId}/dashboard`);
       if (res.ok) setDashboard(await res.json());
     } catch { /* silent */ }
   }
   async function fetchTranscriptScores() {
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/transcript_scores`);
+      if (!userId) return;
+      const res = await fetch(`${API_BASE}/users/${userId}/transcript_scores`);
       if (res.ok) setTranscriptScores(await res.json());
     } catch { /* silent */ }
+  }
+
+  function switchWorkspace(mode: "demo" | "sandbox") {
+    if (mode === "demo") {
+      localStorage.setItem("forge_active_workspace", "demo");
+      setUserId("demo");
+    } else {
+      localStorage.setItem("forge_active_workspace", "sandbox");
+      let sbId = localStorage.getItem("forge_sandbox_id");
+      if (!sbId) {
+        sbId = "sb_" + Math.random().toString(36).substring(2, 10);
+        localStorage.setItem("forge_sandbox_id", sbId);
+      }
+      setUserId(sbId);
+    }
   }
   async function copyToClipboard(text: string, label: string) {
     try { await navigator.clipboard.writeText(text); } catch { /* fallback */ }
@@ -696,35 +714,38 @@ export default function Page() {
 
   /* ── Action handlers ─────────────────────────────────── */
   async function uploadAndBuild() {
+    if (!userId) return;
     setBusy("build"); setCompletedSteps([]); setError(null);
     try {
       for (const file of files) {
         const body = new FormData();
         body.append("file", file);
-        const res = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, { method: "POST", body });
+        const res = await fetch(`${API_BASE}/users/${userId}/ingest`, { method: "POST", body });
         if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
       }
       setCompletedSteps(["Ingest", "Transcribe"]);
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/users/${userId}/build`, { method: "POST" });
       setBuildJobId((await res.json()).job_id);
     } catch (e) { setError(String(e)); } finally { setBusy(null); }
   }
   async function callAgent() {
+    if (!userId) return;
     setBusy("call"); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/call`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/users/${userId}/call`, { method: "POST" });
       if (!res.ok) throw new Error("Call agent failed");
       setCallInfo(await res.json());
     } catch (e) { setError(String(e)); } finally { setBusy(null); }
   }
   async function launchAttack() {
+    if (!userId) return;
     setBusy("attack"); setError(null);
     try {
       try {
-        const sr = await fetch(`${API_BASE}/users/${USER_ID}/attack_suite`);
+        const sr = await fetch(`${API_BASE}/users/${userId}/attack_suite`);
         if (sr.ok) setAttackSuite(await sr.json());
       } catch { /* best-effort */ }
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/users/${userId}/vanguard/run`, { method: "POST" });
       if (!res.ok) throw new Error("Launch attack failed");
       const payload = await res.json();
       setRunId(payload.run_id);
@@ -746,9 +767,10 @@ export default function Page() {
     });
   }
   async function improve() {
+    if (!userId) return;
     setBusy("improve"); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/users/${userId}/vanguard/improve`, { method: "POST" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error((d as Record<string, string>).detail || "Improvement cycle failed");
@@ -760,13 +782,13 @@ export default function Page() {
     } catch (e) { setError(String(e)); } finally { setBusy(null); }
   }
   async function sendChat() {
-    if (!chatMessage.trim() || chatLoading) return;
+    if (!chatMessage.trim() || chatLoading || !userId) return;
     setChatLoading(true); setChatResponse(null); setChatLatency(null);
     try {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatMessage, user_id: USER_ID }),
+        body: JSON.stringify({ message: chatMessage, user_id: userId }),
       });
       if (!res.ok) throw new Error("Chat request failed");
       const data = await res.json();
@@ -776,17 +798,42 @@ export default function Page() {
 
   /* ── Effects ─────────────────────────────────────────── */
   useEffect(() => {
+    const lastActive = localStorage.getItem("forge_active_workspace") || "demo";
+    if (lastActive === "demo") {
+      setUserId("demo");
+    } else {
+      const sbId = localStorage.getItem("forge_sandbox_id") || ("sb_" + Math.random().toString(36).substring(2, 10));
+      localStorage.setItem("forge_sandbox_id", sbId);
+      setUserId(sbId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    
+    // Reset states on workspace switch to avoid leakages
+    setCompletedSteps([]);
+    setBuildJobId(null);
+    setBuildStage(null);
+    setCallInfo(null);
+    setRunId(null);
+    setRun(null);
+    setDashboard({});
+    setStatusInfo(null);
+    setTranscriptScores(null);
+    setAttackSuite([]);
+
     fetchStatus(); refreshDashboard(); fetchTranscriptScores();
     const st = setInterval(fetchStatus, 30000);
     const dt = setInterval(refreshDashboard, 15000);
     return () => { clearInterval(st); clearInterval(dt); };
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    if (!buildJobId) return;
+    if (!buildJobId || !userId) return;
     const timer = window.setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/users/${USER_ID}/build/status`);
+        const res = await fetch(`${API_BASE}/users/${userId}/build/status`);
         if (!res.ok) return;
         const status: BuildStatus = await res.json();
         const nxt = new Set(completedSteps);
@@ -805,11 +852,11 @@ export default function Page() {
       } catch { /* silent */ }
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [buildJobId, completedSteps]);
+  }, [buildJobId, completedSteps, userId]);
 
   useEffect(() => {
-    if (!runId) return;
-    const pollUrl = `${API_BASE}/users/${USER_ID}/vanguard/runs/${runId}/live` as const;
+    if (!runId || !userId) return;
+    const pollUrl = `${API_BASE}/users/${userId}/vanguard/runs/${runId}/live` as const;
     const timer = window.setInterval(async () => {
       try {
         const res = await fetch(pollUrl);
@@ -837,11 +884,11 @@ export default function Page() {
             autoLoopCycleRef.current += 1;
             setAutoLoopCycle(autoLoopCycleRef.current); setAutoLoopRunning(true);
             setTimeout(async () => {
-              try { await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, { method: "POST" }); } catch { /* best-effort */ }
+              try { await fetch(`${API_BASE}/users/${userId}/vanguard/improve`, { method: "POST" }); } catch { /* best-effort */ }
               setTimeout(async () => {
                 if (!autoLoopActiveRef.current) { setAutoLoopRunning(false); return; }
                 try {
-                  const r = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
+                  const r = await fetch(`${API_BASE}/users/${userId}/vanguard/run`, { method: "POST" });
                   if (r.ok) {
                     const p = await r.json();
                     setRun({ run_id: p.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
@@ -859,7 +906,7 @@ export default function Page() {
       } catch { /* silent */ }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [runId]);
+  }, [runId, userId]);
 
   useEffect(() => {
     if (improvementRunning && chartData.length > improveStartCount.current) {
@@ -951,11 +998,44 @@ export default function Page() {
         display: "flex", flexDirection: "column", padding: "20px 16px", zIndex: 50,
       }}>
         {/* Brand */}
-        <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 24, padding: "0 8px" }}>
+        <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 20, padding: "0 8px" }}>
           <span style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)" }}>
             FORGE
           </span>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--clay)" }} />
+        </div>
+
+        {/* Workspace selector */}
+        <div style={{
+          display: "flex", background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)", padding: 2, marginBottom: 20, gap: 2,
+        }}>
+          <button
+            onClick={() => switchWorkspace("demo")}
+            style={{
+              flex: 1, border: "none", borderRadius: "calc(var(--radius-sm) - 2px)",
+              fontSize: 11, padding: "5px 2px", fontWeight: 600,
+              background: userId === "demo" ? "var(--clay-tint)" : "transparent",
+              color: userId === "demo" ? "var(--clay-deep)" : "var(--ink-2)",
+              cursor: "pointer", transition: "all 0.15s",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            Demo
+          </button>
+          <button
+            onClick={() => switchWorkspace("sandbox")}
+            style={{
+              flex: 1, border: "none", borderRadius: "calc(var(--radius-sm) - 2px)",
+              fontSize: 11, padding: "5px 2px", fontWeight: 600,
+              background: userId !== "demo" ? "var(--clay-tint)" : "transparent",
+              color: userId !== "demo" ? "var(--clay-deep)" : "var(--ink-2)",
+              cursor: "pointer", transition: "all 0.15s",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            Sandbox
+          </button>
         </div>
 
         {/* Nav */}
