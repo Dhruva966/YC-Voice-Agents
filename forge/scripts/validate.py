@@ -100,7 +100,7 @@ REQUIRED_ENV_VARS = [
     "TWILIO_PHONE_NUMBER",
 ]
 
-# CEKURA_API_KEY / CEKURA_BASE_URL are optional — evaluator falls back to LLM.
+# CEKURA_API_KEY / CEKURA_BASE_URL are optional; NVIDIA NIM still drives evaluation.
 
 try:
     missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
@@ -183,11 +183,11 @@ except Exception as exc:
 # Check 4: Gemini Live model configuration is current
 # ---------------------------------------------------------------------------
 try:
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
-    ok = "live" in gemini_model.lower() and "flash" in gemini_model.lower()
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+    ok = "preview" in gemini_model.lower() and "flash" in gemini_model.lower()
     detail = f"model: {gemini_model}"
-    if gemini_model == "gemini-3.1-flash-live":
-        detail += "; expected preview model code is gemini-3.1-flash-live-preview"
+    if "gemini-2.5-flash" in gemini_model.lower() and not gemini_model.endswith("-12-2025"):
+        detail += "; expected model code is gemini-2.5-flash-native-audio-preview-12-2025"
         ok = False
     check(4, "Gemini Live model config", ok, detail)
 except Exception as exc:

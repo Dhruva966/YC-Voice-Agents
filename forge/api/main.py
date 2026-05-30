@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import hmac
 import json
 import logging
@@ -11,6 +12,7 @@ import os
 import re
 import tempfile
 import time
+import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -187,13 +189,44 @@ def _require_built_user(user_id: str) -> None:
 
 def _twilio_stream_url(request: Request, user_id: str) -> str:
     configured = os.getenv("TWILIO_STREAM_URL") or os.getenv("WSS_BASE_URL")
+    ts = str(int(time.time()))
+    params = {"user_id": user_id}
+    if secret := _media_stream_secret():
+        params["ts"] = ts
+        params["token"] = _media_stream_token(user_id, ts, secret)
+    query = urllib.parse.urlencode(params)
     if configured:
         base = configured.rstrip("/")
         separator = "&" if "?" in base else "?"
-        return f"{base}{separator}user_id={user_id}"
+        return f"{base}{separator}{query}"
 
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    return f"wss://{host}/media-stream?user_id={user_id}"
+    return f"wss://{host}/media-stream?{query}"
+
+
+def _media_stream_secret() -> str | None:
+    return os.getenv("MEDIA_STREAM_SECRET") or os.getenv("TWILIO_AUTH_TOKEN")
+
+
+def _media_stream_token(user_id: str, ts: str, secret: str) -> str:
+    message = f"{user_id}:{ts}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _validate_media_stream_auth(user_id: str, ts: str | None, token: str | None) -> bool:
+    secret = _media_stream_secret()
+    if not secret:
+        return True
+    if not ts or not token:
+        return False
+    try:
+        timestamp = int(ts)
+    except ValueError:
+        return False
+    if abs(time.time() - timestamp) > 600:
+        return False
+    expected = _media_stream_token(user_id, ts, secret)
+    return hmac.compare_digest(token, expected)
 
 
 def _put_status(user_id: str, job_id: str, payload: dict[str, Any]) -> None:
@@ -418,7 +451,6 @@ _ALLOWED_ROOM_DOMAINS = {"daily.co"}
 
 @app.post("/join_room")
 async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
-    import urllib.parse
     user_id = _validate_user_id(request.user_id)
     parsed = urllib.parse.urlparse(request.room_url)
     if not any(parsed.netloc == d or parsed.netloc.endswith("." + d) for d in _ALLOWED_ROOM_DOMAINS):
@@ -478,9 +510,18 @@ async def media_stream(websocket: WebSocket):
     try:
         raw_user_id = websocket.query_params.get("user_id", "")
         if not raw_user_id:
-            LOGGER.warning("media_stream_no_user_id_param — falling back to 'demo'")
-            raw_user_id = "demo"
+            LOGGER.warning("media_stream_no_user_id_param")
+            await websocket.close(code=1008)
+            return
         user_id = _validate_user_id(raw_user_id)
+        if not _validate_media_stream_auth(
+            user_id,
+            websocket.query_params.get("ts"),
+            websocket.query_params.get("token"),
+        ):
+            LOGGER.warning("media_stream_auth_failed user_id=%s", user_id)
+            await websocket.close(code=1008)
+            return
     except HTTPException:
         await websocket.close(code=1008)
         return
@@ -825,6 +866,7 @@ async def transcript_scores(user_id: str) -> dict[str, Any]:
 async def chat(req: ChatRequest):
     user_id = _validate_user_id(req.user_id)
     _rate_limit("chat", user_id)
+    _require_built_user(user_id)
     start = time.time()
     system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, user_id, user_id, [], req.message)
     client = openai.AsyncOpenAI(

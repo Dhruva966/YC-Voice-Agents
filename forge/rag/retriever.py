@@ -10,11 +10,6 @@ from typing import Iterable
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI
 
-
-DEFAULT_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-1b-v2"
-DEFAULT_EMBEDDING_DIMENSIONS = 1024
-
-
 def _use_local() -> bool:
     return os.getenv("USE_LOCAL_RAG", "true").lower() == "true"
 
@@ -30,26 +25,11 @@ def _client() -> OpenAI:
     return OpenAI(api_key=os.getenv("NVIDIA_API_KEY"), base_url=os.getenv("NVIDIA_BASE_URL"))
 
 
-def _embedding_model() -> str:
-    return os.getenv("NVIDIA_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
-
-
-def _embedding_dimensions() -> int:
-    raw_dimensions = os.getenv("NVIDIA_EMBEDDING_DIMENSIONS", str(DEFAULT_EMBEDDING_DIMENSIONS))
-    try:
-        dimensions = int(raw_dimensions)
-    except ValueError as exc:
-        raise ValueError("NVIDIA_EMBEDDING_DIMENSIONS must be an integer") from exc
-    if dimensions <= 0:
-        raise ValueError("NVIDIA_EMBEDDING_DIMENSIONS must be positive")
-    return dimensions
-
-
 def _embed(texts: list[str], input_type: str = "passage") -> list[list[float]]:
+    model = os.getenv("NVIDIA_EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-1b-v2")
     response = _client().embeddings.create(
-        model=_embedding_model(),
+        model=model,
         input=texts,
-        dimensions=_embedding_dimensions(),
         extra_body={"input_type": input_type},
     )
     return [item.embedding for item in response.data]
@@ -83,28 +63,10 @@ def _get_chroma():
 
 
 def _chroma_collection(user_id: str):
-    import chromadb
-
-    client = _get_chroma()
-    name = f"user_{user_id}"
-    metadata = {
-        "hnsw:space": "cosine",
-        "embedding_model": _embedding_model(),
-        "embedding_dimensions": _embedding_dimensions(),
-    }
-    try:
-        collection = client.get_collection(name=name)
-    except chromadb.errors.NotFoundError:
-        return client.create_collection(name=name, metadata=metadata)
-    collection_metadata = collection.metadata or {}
-    if (
-        collection_metadata.get("embedding_model") != metadata["embedding_model"]
-        or collection_metadata.get("embedding_dimensions") != metadata["embedding_dimensions"]
-    ):
-        # Chroma collection dimensions are immutable; the embedding model changed, so rebuild.
-        client.delete_collection(name=name)
-        return client.create_collection(name=name, metadata=metadata)
-    return collection
+    return _get_chroma().get_or_create_collection(
+        name=f"user_{user_id}",
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 def _chroma_init_db() -> None:
@@ -118,19 +80,9 @@ def _chroma_build(user_id: str, texts: list[str], source_label: str) -> int:
     collection = _chroma_collection(user_id)
     inserted = 0
     for start in range(0, len(chunks), 32):
-        batch = []
-        ids = []
-        seen_ids = set()
-        for chunk in chunks[start : start + 32]:
-            id_ = hashlib.sha256(f"{user_id}:{chunk}".encode()).hexdigest()
-            if id_ in seen_ids:
-                continue
-            seen_ids.add(id_)
-            batch.append(chunk)
-            ids.append(id_)
-        if not batch:
-            continue
+        batch = chunks[start : start + 32]
         embeddings = _embed(batch, input_type="passage")
+        ids = [hashlib.sha256(f"{user_id}:{c}".encode()).hexdigest() for c in batch]
         metadatas = [{"source": source_label}] * len(batch)
         existing = set(collection.get(ids=ids)["ids"])
         new_ids, new_docs, new_embs, new_meta = [], [], [], []
@@ -202,37 +154,21 @@ def _get_conn():
 def _pgvector_init_db() -> None:
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            dimensions = _embedding_dimensions()
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute(
-                f"""
+                """
                 CREATE TABLE IF NOT EXISTS knowledge_chunks (
                     id BIGSERIAL PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     chunk_hash TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    embedding vector({dimensions}) NOT NULL,
+                    embedding vector(1024) NOT NULL,
                     source_file TEXT,
                     created_at TIMESTAMPTZ DEFAULT now(),
                     UNIQUE(user_id, chunk_hash)
                 )
                 """
             )
-            cur.execute(
-                """
-                SELECT atttypmod - 4
-                FROM pg_attribute
-                WHERE attrelid = 'knowledge_chunks'::regclass
-                  AND attname = 'embedding'
-                  AND NOT attisdropped
-                """
-            )
-            row = cur.fetchone()
-            if row and row[0] not in (-1, dimensions):
-                raise RuntimeError(
-                    "knowledge_chunks.embedding is vector(%s), but NVIDIA_EMBEDDING_DIMENSIONS=%s"
-                    % (row[0], dimensions)
-                )
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_hnsw
@@ -287,21 +223,6 @@ def _pgvector_retrieve(user_id: str, query: str, top_k: int = 5) -> list[str]:
             return [row[0] for row in cur.fetchall()]
 
 
-def _chroma_has_knowledge_base(user_id: str) -> bool:
-    collection = _chroma_collection(user_id)
-    return collection.count() > 0
-
-
-def _pgvector_has_knowledge_base(user_id: str) -> bool:
-    with _get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT EXISTS (SELECT 1 FROM knowledge_chunks WHERE user_id = %s LIMIT 1)",
-                (user_id,),
-            )
-            return bool(cur.fetchone()[0])
-
-
 # ---------------------------------------------------------------------------
 # Public API — routed by USE_LOCAL_RAG
 # ---------------------------------------------------------------------------
@@ -323,9 +244,3 @@ def retrieve(user_id: str, query: str, top_k: int = 5) -> list[str]:
     if _use_local():
         return _chroma_retrieve(user_id, query, top_k)
     return _pgvector_retrieve(user_id, query, top_k)
-
-
-def has_knowledge_base(user_id: str) -> bool:
-    if _use_local():
-        return _chroma_has_knowledge_base(user_id)
-    return _pgvector_has_knowledge_base(user_id)

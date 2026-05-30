@@ -26,6 +26,13 @@ _VANGUARD_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
+def _internal_api_headers() -> dict[str, str] | None:
+    api_key = os.getenv("FORGE_API_KEY")
+    if not api_key:
+        return None
+    return {"X-API-Key": api_key}
+
+
 def _fresh_session(session: dict[str, Any]) -> dict[str, Any]:
     instance = dict(session)
     if session.get("session_id"):
@@ -83,6 +90,7 @@ async def _run_one_session(
     async with httpx.AsyncClient(timeout=30) as client:
         join_response = await client.post(
             f"{persona_agent_url.rstrip('/')}/join_room",
+            headers=_internal_api_headers(),
             json={
                 "user_id": user_id,
                 "room_url": daily["room_url"],
@@ -204,7 +212,7 @@ async def run_vanguard(
 
 
 def build_default_attack_suite() -> list[dict[str, Any]]:
-    # 9 sessions: one per persona, first 9 of the 10 defined personas.
+    # 9 sessions: one per selected persona, first 9 of the 10 defined personas.
     # Keeps concurrent Daily room count manageable for demo hardware.
     personas = list(ATTACKER_PERSONAS)[:9]
     return [

@@ -41,18 +41,12 @@ def _put_status(user_id: str, job_id: str, payload: dict) -> None:
     _s3_client().put_object(Bucket=_bucket(), Key=f"{user_id}/build_status/latest.json", ...)
 ```
 
-✅ **Gemini Live pipeline in `/media-stream` — audio-to-audio, no separate STT/TTS:**
+✅ **All voice calls go through Daily rooms — no Twilio:**
 ```python
-from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
-
-llm = GeminiLiveLLMService(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    settings=GeminiLiveLLMService.Settings(
-        model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
-        system_instruction=initial_system_prompt,
-        voice=os.getenv("GEMINI_VOICE", "Puck"),
-    ),
-)
+# POST /users/{user_id}/call creates a room, starts the bot, returns room_url
+daily = await _create_daily_room()
+background_tasks.add_task(run_persona_bot, user_id, user_id, daily["room_url"], daily["token"])
+return CallResponse(room_url=daily["room_url"])
 ```
 
 ✅ **Daily room creation is async (httpx), always with expiry:**
@@ -107,14 +101,45 @@ spec = load_personality_spec("demo", ...)
 spec = load_personality_spec(user_id, ...)
 ```
 
+❌ **Never skip user_id validation on write routes:**
+```python
+# WRONG — any string becomes a storage key
+@app.post("/users/{user_id}/build")
+async def build(user_id: str, ...):
+    _run_build(user_id, job_id)
+
+# RIGHT
+@app.post("/users/{user_id}/build")
+async def build(user_id: str, ...):
+    _validate_user_id(user_id)
+    _run_build(user_id, job_id)
+```
+
+❌ **Never use run_id alone as the key into `_vanguard_live` — scope by user:**
+```python
+# WRONG — any caller who guesses a run_id UUID can read another user's live transcript
+sessions = _vanguard_live.get(run_id, [])
+
+# RIGHT
+live_key = f"{user_id}:{run_id}"
+sessions = _vanguard_live.get(live_key, [])
+```
+
+❌ **Never enable Daily cloud recording on Vanguard rooms:**
+```python
+# WRONG — incurs unbounded Daily billing and stores PII
+json={"properties": {"enable_recording": "cloud", "exp": ...}}
+
+# RIGHT
+json={"properties": {"exp": ..., "max_participants": 2}}
+```
+
 ## What NOT to Do
 
 1. **Don't add new routes without a status/polling endpoint** if the work takes >5 seconds. The frontend needs something to poll.
 
-2. **Don't handle Twilio WebSocket errors by silently passing.** Log them, close with a non-1000 code, and let the caller retry.
+2. **Don't run `asyncio.run()` inside an async route.** It creates a new event loop and will crash under uvicorn. Use `asyncio.to_thread()` for sync-in-async or `background_tasks.add_task()`. Note: sync functions added via `BackgroundTasks` run in a thread pool and CAN call `asyncio.run()` safely.
 
-3. **Don't run `asyncio.run()` inside an async route.** It creates a new event loop and will crash under uvicorn. Use `asyncio.to_thread()` for sync-in-async or `background_tasks.add_task()`.
+4. **Don't grow `_vanguard_live` unboundedly.** It's an in-process dict. If you add routes, add cleanup when a run completes. Keys are `"{user_id}:{run_id}"`.
 
-4. **Don't grow `_vanguard_live` unboundedly.** It's an in-process dict. If you add routes, add cleanup when a run completes.
-
-5. **Don't trust the `user_id` path parameter.** It goes directly into storage keys. The shim sanitizes it, but don't use it in subprocess calls, shell commands, or log injection contexts.
+5. **Don't trust the `user_id` path parameter.** Always call `_validate_user_id(user_id)` at the top of write routes. The regex is `^[a-zA-Z0-9_-]{1,64}$`.

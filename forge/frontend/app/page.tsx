@@ -1,218 +1,645 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { Inter } from "next/font/google";
+import { Fira_Code } from "next/font/google";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  CartesianGrid, Line, LineChart, ResponsiveContainer,
+  Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  CheckCircle2, XCircle, Loader2, Phone, Link, Copy, Shield, Zap, Activity, ChevronDown, ChevronRight,
+  CheckCircle2, XCircle, Loader2, Phone, Link as LinkIcon, Copy,
+  Shield, Zap, Activity, ChevronDown, TrendingUp, UploadCloud,
+  Clock, AlertTriangle,
 } from "lucide-react";
 
-const inter = Inter({ subsets: ["latin"] });
+
+const firaCode = Fira_Code({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-mono",
+});
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const USER_ID = "demo";
+const API_KEY = process.env.NEXT_PUBLIC_FORGE_API_KEY || "";
+const USER_ID  = "demo";
 
-const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Configure Voice", "Score Transcripts", "Build RAG", "Fine-tune"];
+const BUILD_STEPS = [
+  "Ingest",
+  "Transcribe",
+  "Extract Personality",
+  "Score Transcripts",
+  "Configure Voice",
+  "Build RAG",
+  "Fine-tune",
+];
 
 const PERSONA_NAMES: Record<string, string> = {
   unauthorized_commitment: "Unauthorized Commitment",
-  pii_exfiltration: "PII Exfiltration",
-  social_engineer: "Social Engineer",
-  jailbreaker: "Jailbreaker",
-  emotional_escalator: "Emotional Escalator",
-  identity_attacker: "Identity Attacker",
-  knowledge_prober: "Knowledge Prober",
-  language_switcher: "Language Switcher",
+  pii_exfiltration:       "PII Exfiltration",
+  social_engineer:       "Social Engineer",
+  jailbreaker:           "Jailbreaker",
+  emotional_escalator:   "Emotional Escalator",
+  identity_attacker:     "Identity Attacker",
+  knowledge_prober:      "Knowledge Prober",
+  language_switcher:     "Language Switcher",
   contradiction_trapper: "Contradiction Trapper",
-  degraded_audio: "Degraded Audio",
+  degraded_audio:        "Degraded Audio",
 };
 
+const SIDEBAR_NAV = [
+  { id: "build",       label: "Build",       Icon: Zap },
+  { id: "agent",       label: "Agent",       Icon: Phone },
+  { id: "vanguard",    label: "Vanguard",    Icon: Shield },
+  { id: "improvement", label: "Improvement", Icon: TrendingUp },
+] as const;
+
+function withApiKey(init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers);
+  if (API_KEY) headers.set("X-API-Key", API_KEY);
+  return { ...init, headers };
+}
+
+/* ─────────── Design tokens ─────────────────────────────── */
+const C = {
+  bg:        "#05060F",
+  card:      "#0C1020",
+  cardUp:    "#111828",
+  border:    "#1B2540",
+  borderLt:  "#263A5E",
+  brand:     "#7C3AED",
+  brandLt:   "#A78BFA",
+  brandGlow: "rgba(124,58,237,0.15)",
+  success:   "#22C55E",
+  successBg: "rgba(34,197,94,0.08)",
+  successBd: "rgba(34,197,94,0.25)",
+  error:     "#EF4444",
+  errorBg:   "rgba(239,68,68,0.08)",
+  errorBd:   "rgba(239,68,68,0.25)",
+  warning:   "#F59E0B",
+  warningBg: "rgba(245,158,11,0.08)",
+  warningBd: "rgba(245,158,11,0.25)",
+  text:      "#EDF2FF",
+  text2:     "#8098B8",
+  text3:     "#3A5070",
+  mono:      "var(--font-mono)",
+} as const;
+
+/* ─────────── Types ──────────────────────────────────────── */
 type DimensionScores = {
   character_consistency?: number;
-  jailbreak_resistance?: number;
-  factual_accuracy?: number;
-  graceful_degradation?: number;
+  jailbreak_resistance?:  number;
+  factual_accuracy?:      number;
+  graceful_degradation?:  number;
 };
-
 type Evaluation = {
-  overall_score: number;
-  overall_pass: boolean;
-  dimension_scores?: DimensionScores;
+  overall_score:        number;
+  overall_pass:         boolean;
+  dimension_scores?:    DimensionScores;
   failure_annotations?: Array<Record<string, unknown>>;
-  provider?: string;
+  provider?:            string;
 };
-
-type TranscriptTurn = {
-  role: string;
-  text: string;
-};
-
+type TranscriptTurn = { role: string; text: string };
 type VanguardSession = {
-  session_id: string;
+  session_id:        string;
   attack_definition_id?: string;
-  attack_persona: string;
-  status: string;
-  overall_score?: number;
+  attack_persona:    string;
+  status:            string;
+  overall_score?:    number;
   duration_seconds?: number;
-  room_url?: string;
-  evaluation?: Evaluation;
-  transcript?: { turns?: TranscriptTurn[] };
+  room_url?:          string;
+  evaluation?:       Evaluation;
+  transcript?:       { turns?: TranscriptTurn[] };
 };
-
 type VanguardRun = {
-  run_id: string;
-  total: number;
-  passed: number;
-  failed: number;
-  pass_rate: number;
-  sessions?: VanguardSession[];
+  run_id: string; total: number; passed: number; failed: number;
+  pass_rate: number; sessions?: VanguardSession[];
 };
-
 type SystemStatus = {
-  personality_spec_ready: boolean;
-  voice_runtime_ready?: boolean;
-  voice_clone_ready: boolean;
-  rag_ready: boolean;
-  vanguard_runs: number;
-  improvement_cycles: number;
-  attack_suite_size: number;
+  personality_spec_ready: boolean; voice_clone_ready: boolean; rag_ready: boolean;
+  vanguard_runs: number; improvement_cycles: number; attack_suite_size: number;
 };
-
-type PassRateHistoryItem = {
-  cycle: number;
-  pass_rate: number;
-  regression_passed?: boolean;
-};
-
+type PassRateHistoryItem = { cycle: number; pass_rate: number; regression_passed?: boolean };
 type Dashboard = {
   latest_vanguard_run_summary?: VanguardRun | null;
-  pass_rate_history?: PassRateHistoryItem[];
-  attack_suite_history?: Array<{ cycle: number; size: number }>;
-  attack_suite_size?: number;
-  voice_id?: string | null;
-  gemini_voice?: string | null;
-  attacker_gemini_voice?: string | null;
-  adapter_id?: string | null;
-  personality_spec?: Record<string, unknown> | null;
-  pass_rate_by_persona?: Record<string, { runs: number; passed: number; pass_rate: number }>;
+  pass_rate_history?:           PassRateHistoryItem[];
+  attack_suite_history?:        Array<{ cycle: number; size: number }>;
+  attack_suite_size?:           number;
+  voice_id?:                    string | null;
+  gemini_voice?:                string | null;
+  attacker_gemini_voice?:       string | null;
+  adapter_id?:                  string | null;
+  personality_spec?:            Record<string, unknown> | null;
+  pass_rate_by_persona?:        Record<string, { runs: number; passed: number; pass_rate: number }>;
 };
-
-type BuildStatus = {
-  job_id: string;
-  stage: string;
-  status: string;
-  error?: string;
-};
-
+type BuildStatus = { job_id: string; stage: string; status: string; error?: string };
 type DimensionScoreCard = {
-  empathy: number;
-  objection_handling: number;
-  naturalness: number;
-  conversational_flow: number;
-  closing_technique: number;
+  empathy: number; objection_handling: number; naturalness: number;
+  conversational_flow: number; closing_technique: number;
 };
-
+const DIMENSION_LABELS: Record<string, string> = {
+  closing_technique:   "Loan Knowledge",
+  objection_handling:  "Objection Handling",
+  empathy:             "Empathy",
+  naturalness:         "Naturalness",
+  conversational_flow: "Conversational Flow",
+};
 type TranscriptScores = {
   aggregate_score: number;
   dimension_scores: DimensionScoreCard;
   top_k_turns: Array<{ caller: string; agent: string; aggregate: number }>;
 };
-
-type ChartPoint = {
-  cycle: number;
-  passRate?: number;
-  suiteSize?: number;
-};
-
+type ChartPoint   = { cycle: number; passRate?: number; suiteSize?: number };
 type LiveResponse = {
-  sessions: VanguardSession[];
-  complete: boolean;
-  total: number;
-  expected_total: number;
-  error?: boolean;
+  sessions: VanguardSession[]; complete: boolean; total: number; expected_total: number;
 };
+type AttackSuiteItem = { session_id: string; attack_persona: string; status: string };
 
-type AttackSuiteItem = {
-  session_id: string;
-  attack_persona: string;
-  status: string;
-};
-
-const SIDEBAR_NAV = [
-  { id: "build", label: "Build" },
-  { id: "agent", label: "Agent" },
-  { id: "vanguard", label: "Vanguard" },
-  { id: "improvement", label: "Improvement" },
-];
-
+/* ─────────── Utils ──────────────────────────────────────── */
 function formatTime(ts: Date): string {
   return ts.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/* ─────────── Primitive button components ────────────────── */
+function PrimaryBtn({
+  children, onClick, disabled, style,
+}: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; style?: React.CSSProperties }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick} disabled={disabled}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        fontSize: 13, fontWeight: 500, padding: "8px 16px",
+        borderRadius: 8, border: "1px solid rgba(124,58,237,0.5)", cursor: disabled ? "not-allowed" : "pointer",
+        background: hover && !disabled ? "linear-gradient(135deg,#8B5CF6,#7C3AED)" : "linear-gradient(135deg,#7C3AED,#6D28D9)",
+        color: "#fff",
+        boxShadow: hover && !disabled ? "0 4px 16px rgba(124,58,237,0.35)" : "0 2px 8px rgba(124,58,237,0.2)",
+        transform: hover && !disabled ? "translateY(-1px)" : "none",
+        opacity: disabled ? 0.55 : 1,
+        transition: "all 0.18s",
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function GreenBtn({
+  children, onClick, disabled,
+}: { children: React.ReactNode; onClick?: () => void; disabled?: boolean }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick} disabled={disabled}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        fontSize: 13, fontWeight: 500, padding: "8px 16px",
+        borderRadius: 8, border: "1px solid rgba(22,163,74,0.5)", cursor: disabled ? "not-allowed" : "pointer",
+        background: hover && !disabled ? "linear-gradient(135deg,#22C55E,#16A34A)" : "linear-gradient(135deg,#16A34A,#15803D)",
+        color: "#fff",
+        boxShadow: hover && !disabled ? "0 4px 16px rgba(34,197,94,0.3)" : "0 2px 8px rgba(34,197,94,0.15)",
+        transform: hover && !disabled ? "translateY(-1px)" : "none",
+        opacity: disabled ? 0.55 : 1,
+        transition: "all 0.18s",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Card({
+  children, style,
+}: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16, ...style }}>
+      {children}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
+      color: "var(--clay)", textTransform: "uppercase", marginBottom: 10,
+      fontFamily: "var(--font-mono)",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+/* ─────────── Pass-rate donut ────────────────────────────── */
+function PassRateRing({ rate, size = 72 }: { rate: number; size?: number }) {
+  const r    = (size - 10) / 2;
+  const circ = 2 * Math.PI * r;
+  const off  = circ * (1 - rate / 100);
+  const clr  = rate >= 80 ? "var(--status-green)" : rate >= 50 ? "var(--status-amber)" : "var(--status-red)";
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
+      style={{ transform: "rotate(-90deg)", flexShrink: 0 }}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth={8} />
+      <circle
+        cx={size / 2} cy={size / 2} r={r}
+        fill="none" stroke={clr} strokeWidth={8}
+        strokeDasharray={circ} strokeDashoffset={off}
+        strokeLinecap="round"
+        style={{ transition: "stroke-dashoffset 0.6s ease" }}
+      />
+    </svg>
+  );
+}
+
+/* ─────────── Improvement chart ──────────────────────────── */
 function ImprovementChart({ data }: { data: ChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-        <CartesianGrid stroke="#1f1f23" vertical={false} />
-        <XAxis dataKey="cycle" tick={{ fill: "#71717a", fontSize: 11 }} axisLine={{ stroke: "#1f1f23" }} tickLine={false} />
-        <YAxis yAxisId="left" orientation="left" domain={[0, 100]} tick={{ fill: "#71717a", fontSize: 11 }} axisLine={{ stroke: "#1f1f23" }} tickLine={false} />
-        <YAxis yAxisId="right" orientation="right" domain={["auto", "auto"]} tick={{ fill: "#71717a", fontSize: 11 }} axisLine={{ stroke: "#1f1f23" }} tickLine={false} />
+        <CartesianGrid stroke="var(--border)" vertical={false} strokeDasharray="3 3" />
+        <XAxis dataKey="cycle"
+          tick={{ fill: "var(--ink-3)", fontSize: 11 }}
+          axisLine={{ stroke: "var(--border)" }} tickLine={false} />
+        <YAxis yAxisId="left" orientation="left" domain={[0, 100]}
+          tick={{ fill: "var(--ink-3)", fontSize: 11 }}
+          axisLine={false} tickLine={false}
+          tickFormatter={(v) => `${v}%`} />
+        <YAxis yAxisId="right" orientation="right" domain={["auto", "auto"]}
+          tick={{ fill: "var(--ink-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
         <Tooltip
-          contentStyle={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 6, color: "#f4f4f5", fontSize: 12 }}
-          labelStyle={{ color: "#71717a" }}
+          contentStyle={{
+            background: "var(--surface)", border: "1px solid var(--border)",
+            borderRadius: 8, color: "var(--ink)", fontSize: 12,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.08)",
+          }}
+          labelStyle={{ color: "var(--ink-3)", marginBottom: 4 }}
+          cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
         />
-        <Legend wrapperStyle={{ fontSize: 11, color: "#71717a" }} />
-        <Line yAxisId="left" type="monotone" dataKey="passRate" name="Pass rate %" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3, fill: "#7c3aed" }} />
-        <Line yAxisId="right" type="monotone" dataKey="suiteSize" name="Attack suite size" stroke="#a1a1aa" strokeWidth={1.5} strokeDasharray="4 3" dot={{ r: 2, fill: "#a1a1aa" }} />
+        <Line yAxisId="left" type="monotone" dataKey="passRate" name="Pass Rate %"
+          stroke="var(--clay)" strokeWidth={2.5}
+          dot={{ r: 4, fill: "var(--clay)", stroke: "var(--surface)", strokeWidth: 2 }}
+          activeDot={{ r: 6, fill: "var(--clay-deep)", stroke: "var(--surface)", strokeWidth: 2 }} />
+        <Line yAxisId="right" type="monotone" dataKey="suiteSize" name="Attack Variants"
+          stroke="var(--ink-2)" strokeWidth={1.5} strokeDasharray="5 3"
+          dot={{ r: 3, fill: "var(--ink-2)", strokeWidth: 0 }} />
       </LineChart>
     </ResponsiveContainer>
   );
 }
-
 const ImprovementChartNoSsr = dynamic(() => Promise.resolve(ImprovementChart), { ssr: false });
 
-export default function Page() {
-  const [activeSection, setActiveSection] = useState("build");
-  const [rawText, setRawText] = useState<string>("");
-  const [completedSteps, setCompletedSteps] = useState<string[]>([]);
-  const [buildJobId, setBuildJobId] = useState<string | null>(null);
-  const [buildStage, setBuildStage] = useState<string | null>(null);
-  const [callInfo, setCallInfo] = useState<{ room_url: string; phone_number: string } | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [run, setRun] = useState<VanguardRun | null>(null);
-  const [hydratedRun, setHydratedRun] = useState<VanguardRun | null>(null);
-  const [dashboard, setDashboard] = useState<Dashboard>({});
-  const [statusInfo, setStatusInfo] = useState<SystemStatus | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [copiedText, setCopiedText] = useState<string | null>(null);
-  const [chatMessage, setChatMessage] = useState("");
-  const [chatResponse, setChatResponse] = useState<string | null>(null);
-  const [chatLatency, setChatLatency] = useState<number | null>(null);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [transcriptScores, setTranscriptScores] = useState<TranscriptScores | null>(null);
-  const [improvementRunning, setImprovementRunning] = useState(false);
-  const [chatFocused, setChatFocused] = useState(false);
-  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
-  const [transcriptOpen, setTranscriptOpen] = useState<Set<string>>(new Set());
-  const [attackSuite, setAttackSuite] = useState<AttackSuiteItem[]>([]);
-  const [autoLoopActive, setAutoLoopActive] = useState(false);
-  const [autoLoopCycle, setAutoLoopCycle] = useState(0);
-  const [autoLoopRunning, setAutoLoopRunning] = useState(false);
-  const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
-  const improvePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const improveStartCountRef = useRef(0);
-  const autoLoopActiveRef = useRef(false);
-  const autoLoopCycleRef = useRef(0);
+/* ─────────── Waveform bars ──────────────────────────────── */
+const WAVE_CONFIGS = [
+  { anim: "vg-wave-a", dur: "0.72s", delay: "0ms"   },
+  { anim: "vg-wave-c", dur: "0.95s", delay: "70ms"  },
+  { anim: "vg-wave-b", dur: "0.81s", delay: "140ms" },
+  { anim: "vg-wave-d", dur: "0.68s", delay: "30ms"  },
+  { anim: "vg-wave-a", dur: "1.05s", delay: "200ms" },
+  { anim: "vg-wave-c", dur: "0.77s", delay: "110ms" },
+  { anim: "vg-wave-b", dur: "0.90s", delay: "260ms" },
+  { anim: "vg-wave-d", dur: "0.65s", delay: "55ms"  },
+];
+function Waveform({ color, active }: { color: string; active: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 22 }}>
+      {WAVE_CONFIGS.map((cfg, i) => (
+        <div key={i} style={{
+          width: 3, borderRadius: 2,
+          background: active ? color : "var(--border)",
+          height: active ? undefined : 3,
+          minHeight: 3,
+          animation: active
+            ? `${cfg.anim} ${cfg.dur} ease-in-out ${cfg.delay} infinite alternate`
+            : "none",
+          transition: "background 0.4s",
+        }} />
+      ))}
+    </div>
+  );
+}
 
+/* ─────────── Score pill ─────────────────────────────────── */
+function ScorePill({ label, value }: { label: string; value?: number }) {
+  if (value == null) return null;
+  const color = value >= 70 ? "var(--status-green)" : value >= 40 ? "var(--status-amber)" : "var(--status-red)";
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      background: "var(--surface-2)", border: "1px solid var(--border)",
+      borderRadius: "var(--radius-sm)", padding: "3px 8px", fontSize: 11,
+    }}>
+      <span style={{ color: "var(--ink-3)" }}>{label}:</span>
+      <span style={{ color, fontWeight: 600, fontFamily: "var(--font-mono)" }}>{value}%</span>
+    </div>
+  );
+}
+
+/* ─────────── Vanguard card ──────────────────────────────── */
+function VanguardCard({
+  session, personaName, index, isExpanded, onToggle,
+}: {
+  session: VanguardSession | null;
+  personaName: string;
+  index: number;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  const status    = session?.status ?? "queued";
+  const isPassed  = status === "passed";
+  const isFailed  = status === "failed";
+  const isRunning = status === "running";
+  const isDone    = isPassed || isFailed;
+  const score     = session?.overall_score != null ? Math.round(session.overall_score) : null;
+  const hasTx     = (session?.transcript?.turns?.length ?? 0) > 0;
+  const [hover, setHover] = useState(false);
+
+  const borderColor = isPassed  ? "var(--status-green)"
+    : isFailed  ? "var(--status-red)"
+    : isRunning ? "var(--clay)"
+    : "var(--border)";
+  const glowAnim = isPassed  ? "glow-green  2.8s ease-in-out infinite"
+    : isFailed  ? "glow-red   2.8s ease-in-out infinite"
+    : isRunning ? "glow-purple 2.8s ease-in-out infinite"
+    : "none";
+
+  const statusColor = isPassed ? "var(--status-green)"
+    : isFailed ? "var(--status-red)"
+    : isRunning ? "var(--clay-deep)"
+    : "var(--ink-3)";
+  const statusBg = isPassed ? "color-mix(in srgb, var(--status-green) 15%, transparent)"
+    : isFailed ? "color-mix(in srgb, var(--status-red) 15%, transparent)"
+    : isRunning ? "var(--clay-tint)"
+    : "var(--surface-2)";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <div
+        onClick={hasTx ? onToggle : undefined}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{
+          background: hover && hasTx && isDone ? "var(--surface-2)"
+            : "var(--surface)",
+          border: `${isDone || isRunning ? 1.5 : 1}px solid ${borderColor}`,
+          borderRadius: "var(--radius-lg)", padding: 14,
+          cursor: hasTx ? "pointer" : "default",
+          animation: `vg-pop-in 0.32s ease-out ${index * 60}ms both, ${glowAnim}`,
+          transition: "background 0.2s, border-color 0.4s",
+          display: "flex", flexDirection: "column", gap: 10,
+          minHeight: 148,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", lineHeight: 1.3, flex: 1 }}>
+            {personaName}
+          </span>
+          <span style={{
+            fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 20,
+            background: statusBg, color: statusColor, flexShrink: 0, letterSpacing: "0.04em",
+            fontFamily: "var(--font-mono)",
+          }}>
+            {status}
+          </span>
+        </div>
+
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 8 }}>
+          {(isRunning || isDone) && session ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 9, color: "var(--ink-3)", width: 72, flexShrink: 0, letterSpacing: "0.06em", fontFamily: "var(--font-mono)", textTransform: "uppercase" }}>ATTACKER</span>
+                <Waveform color="var(--status-amber)" active={isRunning} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 9, color: "var(--ink-3)", width: 72, flexShrink: 0, letterSpacing: "0.06em", fontFamily: "var(--font-mono)", textTransform: "uppercase" }}>AGENT</span>
+                <Waveform color="var(--clay)" active={isRunning} />
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", gap: 5, justifyContent: "center", paddingTop: 4 }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--border)" }} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {isDone && score !== null && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, height: 3, background: "var(--surface-2)", borderRadius: 2 }}>
+              <div style={{
+                width: `${score}%`, height: "100%", borderRadius: 2,
+                background: isPassed ? "var(--status-green)" : "var(--status-red)",
+                transition: "width 0.7s cubic-bezier(.23,1,.32,1)",
+              }} />
+            </div>
+            <span style={{ fontSize: 11, color: "var(--ink-2)", width: 32, textAlign: "right", fontFamily: "var(--font-mono)" }}>{score}%</span>
+            {session?.duration_seconds && (
+              <span style={{ fontSize: 10, color: "var(--ink-3)", width: 26, fontFamily: "var(--font-mono)" }}>
+                {Math.round(session.duration_seconds)}s
+              </span>
+            )}
+          </div>
+        )}
+
+        {isDone && hasTx && (
+          <div style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)", display: "flex", alignItems: "center", gap: 4 }}>
+            <ChevronDown size={10} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+            {isExpanded ? "Hide transcript" : "View transcript"}
+          </div>
+        )}
+
+        {isRunning && session?.room_url && (
+          <a
+            href={session.room_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontSize: 10, color: "var(--clay)", textDecoration: "none",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            <LinkIcon size={10} /> Listen live
+          </a>
+        )}
+        {isDone && session?.room_url && (
+          <span
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontSize: 10, color: "var(--ink-3)", textDecoration: "none",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            <Clock size={10} /> Ended
+          </span>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {isExpanded && hasTx && session?.transcript?.turns && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            style={{ overflow: "hidden" }}
+          >
+            <div style={{
+              background: "var(--surface-2)", border: "1px solid var(--border)", borderTop: "none",
+              borderRadius: "0 0 var(--radius-lg) var(--radius-lg)", padding: 12,
+              maxHeight: 260, overflowY: "auto",
+            }}>
+              {session.evaluation?.dimension_scores && (
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
+                  <ScorePill label="Consistency" value={session.evaluation.dimension_scores.character_consistency} />
+                  <ScorePill label="Jailbreak"   value={session.evaluation.dimension_scores.jailbreak_resistance} />
+                  <ScorePill label="Factual"     value={session.evaluation.dimension_scores.factual_accuracy} />
+                  <ScorePill label="Degrade"     value={session.evaluation.dimension_scores.graceful_degradation} />
+                  {session.evaluation.provider && (
+                    <span style={{ fontSize: 10, color: "var(--ink-3)", display: "flex", alignItems: "center", fontFamily: "var(--font-mono)" }}>
+                      via {session.evaluation.provider}
+                    </span>
+                  )}
+                </div>
+              )}
+              {session.transcript.turns.map((turn, i) => {
+                const isAtk = turn.role === "caller" || turn.role === "user" || turn.role.toLowerCase() === "attacker";
+                return (
+                  <div key={i} style={{
+                    display: "flex", flexDirection: "column",
+                    alignItems: isAtk ? "flex-start" : "flex-end", marginBottom: 7,
+                  }}>
+                    <span style={{
+                      fontSize: 9, color: isAtk ? "var(--status-amber)" : "var(--ink-3)", marginBottom: 2,
+                      letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "var(--font-mono)",
+                    }}>
+                      {isAtk ? "ATTACKER" : "AGENT"}
+                    </span>
+                    <div style={{
+                      fontSize: 11, color: "var(--ink)", lineHeight: 1.5,
+                      background: isAtk ? "color-mix(in srgb, var(--status-amber) 8%, var(--surface))" : "var(--surface)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)", padding: "5px 10px", maxWidth: "90%",
+                    }}>
+                      {turn.text}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ─────────── Vanguard grid ──────────────────────────────── */
+function VanguardGrid({
+  suite, sessions, expectedTotal, expandedSessions, onToggleSession,
+}: {
+  suite: AttackSuiteItem[];
+  sessions: VanguardSession[];
+  expectedTotal: number;
+  expandedSessions: Set<string>;
+  onToggleSession: (id: string) => void;
+}) {
+  const sessionMap = new Map(sessions.map((s) => [s.session_id, s]));
+  type Slot = { personaName: string; session: VanguardSession | null; key: string };
+  let slots: Slot[];
+
+  if (suite.length > 0) {
+    const suiteSessionMap = new Map<string, VanguardSession>();
+    sessions.forEach((session) => {
+      suiteSessionMap.set(session.session_id, session);
+      if (session.attack_definition_id) suiteSessionMap.set(session.attack_definition_id, session);
+    });
+    slots = suite.map((item) => ({
+      key:         item.session_id,
+      personaName: PERSONA_NAMES[item.attack_persona] || item.attack_persona,
+      session:     suiteSessionMap.get(item.session_id) ?? null,
+    }));
+    sessions.forEach((s) => {
+      if (!slots.find((sl) => sl.key === s.session_id))
+        slots.push({ key: s.session_id, personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona, session: s });
+    });
+  } else {
+    const liveSlots: Slot[] = sessions.map((s) => ({
+      key: s.session_id, personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona, session: s,
+    }));
+    const ph = Math.max(0, expectedTotal - liveSlots.length);
+    slots = [
+      ...liveSlots,
+      ...Array.from({ length: ph }, (_, i) => ({
+        key: `placeholder-${i}`, personaName: `Room ${liveSlots.length + i + 1}`, session: null,
+      })),
+    ];
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+      {slots.map((slot, i) => (
+        <VanguardCard
+          key={slot.key} index={i}
+          personaName={slot.personaName}
+          session={slot.session}
+          isExpanded={slot.session ? expandedSessions.has(slot.session.session_id) : false}
+          onToggle={() => slot.session && onToggleSession(slot.session.session_id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════ *
+ *  MAIN PAGE                                                *
+ * ═════════════════════════════════════════════════════════ */
+export default function Page() {
+  const [activeSection,       setActiveSection]       = useState("build");
+  const [files,               setFiles]               = useState<File[]>([]);
+  const [isDragging,          setIsDragging]          = useState(false);
+  const [completedSteps,      setCompletedSteps]      = useState<string[]>([]);
+  const [buildJobId,          setBuildJobId]          = useState<string | null>(null);
+  const [buildStage,          setBuildStage]          = useState<string | null>(null);
+  const [callInfo,            setCallInfo]            = useState<{ room_url: string; phone_number: string } | null>(null);
+  const [runId,               setRunId]               = useState<string | null>(null);
+  const [run,                 setRun]                 = useState<VanguardRun | null>(null);
+  const [dashboard,           setDashboard]           = useState<Dashboard>({});
+  const [statusInfo,          setStatusInfo]          = useState<SystemStatus | null>(null);
+  const [lastUpdated,         setLastUpdated]         = useState<Date>(new Date());
+  const [busy,                setBusy]                = useState<string | null>(null);
+  const [error,               setError]               = useState<string | null>(null);
+  const [copiedText,          setCopiedText]          = useState<string | null>(null);
+  const [chatMessage,         setChatMessage]         = useState("");
+  const [chatResponse,        setChatResponse]        = useState<string | null>(null);
+  const [chatLatency,         setChatLatency]         = useState<number | null>(null);
+  const [chatLoading,         setChatLoading]         = useState(false);
+  const [transcriptScores,    setTranscriptScores]    = useState<TranscriptScores | null>(null);
+  const [improvementRunning,  setImprovementRunning]  = useState(false);
+  const [chatFocused,         setChatFocused]         = useState(false);
+  const [expandedSessions,    setExpandedSessions]    = useState<Set<string>>(new Set());
+  const [attackSuite,         setAttackSuite]         = useState<AttackSuiteItem[]>([]);
+  const [autoLoopActive,      setAutoLoopActive]      = useState(false);
+  const [autoLoopCycle,       setAutoLoopCycle]       = useState(0);
+  const [autoLoopRunning,     setAutoLoopRunning]     = useState(false);
+  const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
+
+  const improvePollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const improveStartCount = useRef(0);
+  const autoLoopActiveRef = useRef(false);
+  const autoLoopCycleRef  = useRef(0);
+
+  /* ── Derived ─────────────────────────────────────────── */
   const chartData = useMemo(() => {
     const passRates = dashboard.pass_rate_history || [];
-    const sizes = dashboard.attack_suite_history || [];
-    const byCycle = new Map<number, ChartPoint>();
+    const sizes     = dashboard.attack_suite_history || [];
+    const byCycle   = new Map<number, ChartPoint>();
     passRates.forEach((item) => {
       byCycle.set(item.cycle, { ...(byCycle.get(item.cycle) || { cycle: item.cycle }), passRate: item.pass_rate * 100 });
     });
@@ -232,389 +659,28 @@ export default function Page() {
     return "red";
   }, [statusInfo]);
 
-  const statusDotColor = systemStatusColor === "green"
-    ? "#22c55e"
-    : systemStatusColor === "amber"
-    ? "#f59e0b"
-    : systemStatusColor === "red"
-    ? "#ef4444"
-    : "#52525b";
+  const statusDotColor =
+    systemStatusColor === "green" ? "var(--status-green)"
+    : systemStatusColor === "amber" ? "var(--status-amber)"
+    : systemStatusColor === "red"   ? "var(--status-red)"
+    : "var(--ink-3)";
 
-  const activeRun = run || hydratedRun || dashboard.latest_vanguard_run_summary || null;
-  const total = activeRun?.total || 0;
-  const passed = activeRun?.passed || 0;
-  const passRate = total ? Math.round((passed / total) * 100) : 0;
-  const vanguardRunning = !!runId && (total === 0 || (passed + (activeRun?.failed || 0)) < total);
-  const agentReady = !!statusInfo?.personality_spec_ready && !!statusInfo?.rag_ready;
-
+  const activeRun       = run || dashboard.latest_vanguard_run_summary || null;
+  const total           = activeRun?.total || 0;
+  const passed          = activeRun?.passed || 0;
+  const passRate        = total ? Math.round((passed / total) * 100) : 0;
+  const vanguardRunning = !!runId && total > 0 && (passed + (activeRun?.failed || 0)) < total;
   const isFineTuneReady = !!dashboard.adapter_id;
+  const agentReady = systemStatusColor === "green";
 
   const statusItems = useMemo(() => [
-    { key: "personality_spec_ready", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
-    { key: "voice_runtime_ready", label: "Gemini Voice", ready: statusInfo?.voice_runtime_ready ?? statusInfo?.voice_clone_ready ?? false },
-    { key: "rag_ready", label: "RAG", ready: statusInfo?.rag_ready || false },
-    { key: "finetune", label: "Fine-tune", ready: isFineTuneReady },
-    { key: "vanguard", label: "Vanguard", ready: (statusInfo?.vanguard_runs || 0) > 0 },
-    { key: "cycles", label: "Cycles", ready: (statusInfo?.improvement_cycles || 0) > 0 },
+    { key: "personality", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
+    { key: "voice",       label: "Voice",       ready: statusInfo?.voice_clone_ready || false },
+    { key: "rag",         label: "RAG",         ready: statusInfo?.rag_ready || false },
+    { key: "finetune",    label: "Fine-tune",   ready: isFineTuneReady },
+    { key: "vanguard",    label: "Vanguard",    ready: (statusInfo?.vanguard_runs || 0) > 0 },
+    { key: "cycles",      label: "Cycles",      ready: (statusInfo?.improvement_cycles || 0) > 0 },
   ], [statusInfo, isFineTuneReady]);
-
-  async function fetchStatus() {
-    try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/status`);
-      if (res.ok) {
-        setStatusInfo(await res.json());
-        setLastUpdated(new Date());
-      }
-    } catch {
-      // silent fail
-    }
-  }
-
-  async function refreshDashboard() {
-    try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/dashboard`);
-      if (res.ok) {
-        const nextDashboard: Dashboard = await res.json();
-        setDashboard(nextDashboard);
-        const latestRunId = nextDashboard.latest_vanguard_run_summary?.run_id;
-        if (latestRunId) {
-          const runRes = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/runs/${latestRunId}`);
-          if (runRes.ok) setHydratedRun(await runRes.json());
-        }
-      }
-    } catch {
-      // silent fail
-    }
-  }
-
-  async function fetchTranscriptScores() {
-    try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/transcript_scores`);
-      if (res.ok) setTranscriptScores(await res.json());
-    } catch {
-      // silent fail
-    }
-  }
-
-  useEffect(() => {
-    fetchStatus();
-    refreshDashboard();
-    fetchTranscriptScores();
-    const statusTimer = setInterval(fetchStatus, 30000);
-    const dashTimer = setInterval(refreshDashboard, 15000);
-    return () => { clearInterval(statusTimer); clearInterval(dashTimer); };
-  }, []);
-
-  useEffect(() => {
-    if (!buildJobId) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/users/${USER_ID}/build/status`);
-        if (!res.ok) return;
-        const status: BuildStatus = await res.json();
-        setCompletedSteps((prev) => {
-          const next = new Set(prev);
-          if (status.stage.includes("personality")) next.add("Extract Personality");
-          if (status.stage.includes("voice")) next.add("Configure Voice");
-          if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") next.add("Score Transcripts");
-          if (status.stage.includes("rag")) next.add("Build RAG");
-          if (status.stage.includes("fine")) next.add("Fine-tune");
-          if (status.status === "completed") BUILD_STEPS.forEach((s) => next.add(s));
-          return Array.from(next);
-        });
-        setBuildStage(status.stage);
-        if (status.status === "completed" || status.status === "failed") {
-          window.clearInterval(timer);
-          refreshDashboard();
-          fetchStatus();
-          if (status.status === "failed") {
-            setError(status.error || "Build pipeline failed");
-          }
-          if (status.status === "completed") {
-            fetchTranscriptScores();
-          }
-        }
-      } catch {
-        // silent fail
-      }
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, [buildJobId]);
-
-  useEffect(() => {
-    if (!runId) return;
-    const pollLive =
-      `${API_BASE}/users/${USER_ID}/vanguard/runs/${runId}/live` as const;
-    const timer = window.setInterval(async () => {
-      try {
-        const res = await fetch(pollLive);
-        if (!res.ok) return;
-        const live: LiveResponse = await res.json();
-        if (live.sessions.length > 0 || live.expected_total > 0) {
-          setRun((prev) => {
-            const base = prev || { run_id: runId, total: 0, passed: 0, failed: 0, pass_rate: 0 };
-            const ps = live.sessions.filter((s) => s.status === "passed").length;
-            const fs = live.sessions.filter((s) => s.status === "failed").length;
-            return {
-              ...base,
-              sessions: live.sessions,
-              total: live.expected_total || live.sessions.length,
-              passed: ps,
-              failed: fs,
-              pass_rate: live.sessions.length > 0 ? ps / live.sessions.length : 0,
-            };
-          });
-        }
-        if (live.complete) {
-          window.clearInterval(timer);
-          setRunId(null);
-          refreshDashboard();
-          fetchStatus();
-          if (live.error) {
-            setError("Vanguard failed before sessions completed. Check backend logs and API key configuration.");
-            setAutoLoopRunning(false);
-            return;
-          }
-          // Auto-loop: if < 80% pass rate and loop is active, improve then rerun
-          const ps = live.sessions.filter((s) => s.status === "passed").length;
-          const rate = live.sessions.length > 0 ? ps / live.sessions.length : 0;
-          if (autoLoopActiveRef.current && rate < 0.8 && autoLoopCycleRef.current < 5) {
-            autoLoopCycleRef.current += 1;
-            setAutoLoopCycle(autoLoopCycleRef.current);
-            setAutoLoopRunning(true);
-            // Fire improve, then relaunch after fixed delay
-            setTimeout(async () => {
-              try {
-                await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, { method: "POST" });
-              } catch { /* best-effort */ }
-              // Wait for improvement cycle to process, then relaunch
-              setTimeout(async () => {
-                if (!autoLoopActiveRef.current) { setAutoLoopRunning(false); return; }
-                try {
-                  const r = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
-                  if (r.ok) {
-                    const payload = await r.json();
-                    setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
-                    setExpandedGridSession(new Set());
-                    setRunId(payload.run_id);
-                    refreshDashboard();
-                  }
-                } catch { /* best-effort */ }
-                setAutoLoopRunning(false);
-              }, 22000);
-            }, 1500);
-          } else {
-            setAutoLoopRunning(false);
-            if (autoLoopCycleRef.current >= 5 || rate >= 0.8) {
-              setAutoLoopActive(false);
-              autoLoopActiveRef.current = false;
-            }
-          }
-        }
-      } catch {
-        // silent fail
-      }
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [runId]);
-
-  useEffect(() => {
-    if (improvementRunning && chartData.length > improveStartCountRef.current) {
-      setImprovementRunning(false);
-      if (improvePollRef.current) {
-        clearInterval(improvePollRef.current);
-        improvePollRef.current = null;
-      }
-    }
-  }, [improvementRunning, chartData.length]);
-
-  useEffect(() => {
-    return () => { if (improvePollRef.current) clearInterval(improvePollRef.current); };
-  }, []);
-
-  async function copyToClipboard(text: string, label: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // fallback
-    }
-    setCopiedText(label);
-    setTimeout(() => setCopiedText(null), 2000);
-  }
-
-  function scrollTo(id: string) {
-    setActiveSection(id);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
-  }
-
-  async function uploadAndBuild() {
-    setBusy("build");
-    setCompletedSteps([]);
-    setError(null);
-    try {
-      const blob = new Blob([rawText], { type: "text/plain" });
-      const file = new File([blob], "transcripts.txt", { type: "text/plain" });
-      const body = new FormData();
-      body.append("file", file);
-      const ingestRes = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, { method: "POST", body });
-      if (!ingestRes.ok) throw new Error("Upload failed");
-      setCompletedSteps(["Ingest", "Transcribe"]);
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, { method: "POST" });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || "Build failed to start");
-      }
-      const payload = await res.json();
-      setBuildJobId(payload.job_id);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function callAgent() {
-    setBusy("call");
-    setError(null);
-    if (!agentReady) {
-      setBusy(null);
-      setError("Build must complete before starting the voice agent.");
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/call`, { method: "POST" });
-      if (!res.ok) throw new Error("Call agent failed");
-      setCallInfo(await res.json());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function launchAttack() {
-    setBusy("attack");
-    setError(null);
-    if (!agentReady) {
-      setBusy(null);
-      setError("Build must complete before launching Vanguard.");
-      return;
-    }
-    try {
-      // Pre-fetch attack suite so grid can show named pending cards immediately
-      try {
-        const suiteRes = await fetch(`${API_BASE}/users/${USER_ID}/attack_suite`);
-        if (suiteRes.ok) setAttackSuite(await suiteRes.json());
-      } catch { /* best-effort — grid degrades gracefully */ }
-
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, { method: "POST" });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || "Launch attack failed");
-      }
-      const payload = await res.json();
-      setRunId(payload.run_id);
-      setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
-      setExpandedSessions(new Set());
-      setExpandedGridSession(new Set());
-      setTranscriptOpen(new Set());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  function toggleAutoLoop() {
-    const next = !autoLoopActive;
-    setAutoLoopActive(next);
-    autoLoopActiveRef.current = next;
-    if (!next) { setAutoLoopCycle(0); autoLoopCycleRef.current = 0; setAutoLoopRunning(false); }
-  }
-
-  function toggleGridSession(id: string) {
-    setExpandedGridSession((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-
-  async function improve() {
-    setBusy("improve");
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, { method: "POST" });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || "Improvement cycle failed");
-      }
-      improveStartCountRef.current = chartData.length;
-      setImprovementRunning(true);
-      if (improvePollRef.current) clearInterval(improvePollRef.current);
-      improvePollRef.current = setInterval(refreshDashboard, 20000);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function sendChat() {
-    if (!chatMessage.trim() || chatLoading) return;
-    setChatLoading(true);
-    setChatResponse(null);
-    setChatLatency(null);
-    try {
-      const res = await fetch(`${API_BASE}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatMessage, user_id: USER_ID }),
-      });
-      if (!res.ok) throw new Error("Chat request failed");
-      const data = await res.json();
-      setChatResponse(data.response);
-      setChatLatency(data.latency_ms);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setChatLoading(false);
-    }
-  }
-
-  function toggleSessionExpand(id: string) {
-    setExpandedSessions((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleTranscript(id: string) {
-    setTranscriptOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  const sessions = activeRun?.sessions || [];
-
-  function getActiveStepIndex(stage: string | null): number | null {
-    if (!stage) return null;
-    if (stage.includes("personality")) return 2;
-    if (stage.includes("voice")) return 3;
-    if (stage.includes("scoring")) return 4;
-    if (stage.includes("rag")) return 5;
-    if (stage.includes("fine")) return 6;
-    return null;
-  }
-  const activeStepIdx = getActiveStepIndex(buildStage);
-
-  const buildComplete = buildStage === "submitted" || completedSteps.length >= BUILD_STEPS.length || !!dashboard.personality_spec;
-  const personalitySpec = dashboard.personality_spec as Record<string, unknown> | null | undefined;
 
   const worstPersonas = useMemo(() => {
     const byPersona = dashboard.pass_rate_by_persona;
@@ -624,289 +690,632 @@ export default function Page() {
       .sort((a, b) => a.pass_rate - b.pass_rate);
   }, [dashboard.pass_rate_by_persona]);
 
+  const buildComplete   = buildStage === "submitted" || completedSteps.length >= BUILD_STEPS.length || !!dashboard.personality_spec;
+  const personalitySpec = dashboard.personality_spec as Record<string, unknown> | null | undefined;
+  const sessions        = activeRun?.sessions || [];
+
+  function getActiveStepIndex(stage: string | null): number | null {
+    if (!stage) return null;
+    if (stage.includes("personality")) return 2;
+    if (stage.includes("scoring"))     return 3;
+    if (stage.includes("voice"))       return 4;
+    if (stage.includes("rag"))         return 5;
+    if (stage.includes("fine"))        return 6;
+    return null;
+  }
+  const activeStepIdx = getActiveStepIndex(buildStage);
+
+  /* ── API helpers ─────────────────────────────────────── */
+  async function fetchStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/status`, withApiKey());
+      if (res.ok) { setStatusInfo(await res.json()); setLastUpdated(new Date()); }
+    } catch { /* silent */ }
+  }
+  async function refreshDashboard() {
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/dashboard`, withApiKey());
+      if (res.ok) setDashboard(await res.json());
+    } catch { /* silent */ }
+  }
+  async function fetchTranscriptScores() {
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/transcript_scores`, withApiKey());
+      if (res.ok) setTranscriptScores(await res.json());
+    } catch { /* silent */ }
+  }
+  async function copyToClipboard(text: string, label: string) {
+    try { await navigator.clipboard.writeText(text); } catch { /* fallback */ }
+    setCopiedText(label);
+    setTimeout(() => setCopiedText(null), 2000);
+  }
+  function scrollTo(id: string) {
+    setActiveSection(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+  }
+  function removeFile(idx: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  /* ── Action handlers ─────────────────────────────────── */
+  async function uploadAndBuild() {
+    setBusy("build"); setCompletedSteps([]); setError(null);
+    try {
+      for (const file of files) {
+        const body = new FormData();
+        body.append("file", file);
+        const res = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, withApiKey({ method: "POST", body }));
+        if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
+      }
+      setCompletedSteps(["Ingest", "Transcribe"]);
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, withApiKey({ method: "POST" }));
+      setBuildJobId((await res.json()).job_id);
+    } catch (e) { setError(String(e)); } finally { setBusy(null); }
+  }
+  async function callAgent() {
+    setBusy("call"); setError(null);
+    if (!agentReady) {
+      setBusy(null);
+      setError("Build must complete before starting the live demo call.");
+      return;
+    }
+    const roomWindow = window.open("", "_blank", "noopener,noreferrer");
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/call`, withApiKey({ method: "POST" }));
+      if (!res.ok) throw new Error("Call agent failed");
+      const payload = await res.json();
+      setCallInfo(payload);
+      if (roomWindow && payload.room_url) {
+        roomWindow.location.href = payload.room_url;
+      } else if (payload.room_url) {
+        window.open(payload.room_url, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      roomWindow?.close();
+      setError(String(e));
+    } finally { setBusy(null); }
+  }
+  async function launchAttack() {
+    setBusy("attack"); setError(null);
+    try {
+      try {
+        const sr = await fetch(`${API_BASE}/users/${USER_ID}/attack_suite`, withApiKey());
+        if (sr.ok) setAttackSuite(await sr.json());
+      } catch { /* best-effort */ }
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, withApiKey({ method: "POST" }));
+      if (!res.ok) throw new Error("Launch attack failed");
+      const payload = await res.json();
+      setRunId(payload.run_id);
+      setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
+      setExpandedSessions(new Set());
+      setExpandedGridSession(new Set());
+    } catch (e) { setError(String(e)); } finally { setBusy(null); }
+  }
+  function toggleAutoLoop() {
+    const next = !autoLoopActive;
+    setAutoLoopActive(next); autoLoopActiveRef.current = next;
+    if (!next) { setAutoLoopCycle(0); autoLoopCycleRef.current = 0; setAutoLoopRunning(false); }
+  }
+  function toggleGridSession(id: string) {
+    setExpandedGridSession((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  async function improve() {
+    setBusy("improve"); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, withApiKey({ method: "POST" }));
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error((d as Record<string, string>).detail || "Improvement cycle failed");
+      }
+      improveStartCount.current = chartData.length;
+      setImprovementRunning(true);
+      if (improvePollRef.current) clearInterval(improvePollRef.current);
+      improvePollRef.current = setInterval(refreshDashboard, 20000);
+    } catch (e) { setError(String(e)); } finally { setBusy(null); }
+  }
+  async function sendChat() {
+    if (!chatMessage.trim() || chatLoading) return;
+    setChatLoading(true); setChatResponse(null); setChatLatency(null);
+    try {
+      const res = await fetch(`${API_BASE}/chat`, withApiKey({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: chatMessage, user_id: USER_ID }),
+      }));
+      if (!res.ok) throw new Error("Chat request failed");
+      const data = await res.json();
+      setChatResponse(data.response); setChatLatency(data.latency_ms);
+    } catch (e) { setError(String(e)); } finally { setChatLoading(false); }
+  }
+
+  /* ── Effects ─────────────────────────────────────────── */
+  useEffect(() => {
+    fetchStatus(); refreshDashboard(); fetchTranscriptScores();
+    const st = setInterval(fetchStatus, 30000);
+    const dt = setInterval(refreshDashboard, 15000);
+    return () => { clearInterval(st); clearInterval(dt); };
+  }, []);
+
+  useEffect(() => {
+    if (!buildJobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/users/${USER_ID}/build/status`, withApiKey());
+        if (!res.ok) return;
+        const status: BuildStatus = await res.json();
+        const nxt = new Set(completedSteps);
+        if (status.stage.includes("personality")) nxt.add("Extract Personality");
+        if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") nxt.add("Score Transcripts");
+        if (status.stage.includes("voice")) nxt.add("Configure Voice");
+        if (status.stage.includes("rag"))   nxt.add("Build RAG");
+        if (status.stage.includes("fine"))  nxt.add("Fine-tune");
+        if (status.status === "completed")  BUILD_STEPS.forEach((s) => nxt.add(s));
+        setCompletedSteps(Array.from(nxt));
+        setBuildStage(status.stage);
+        if (status.status === "completed" || status.status === "failed") {
+          window.clearInterval(timer); refreshDashboard(); fetchStatus();
+          if (status.status === "completed") fetchTranscriptScores();
+        }
+      } catch { /* silent */ }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [buildJobId, completedSteps]);
+
+  useEffect(() => {
+    if (!runId) return;
+    const pollUrl = `${API_BASE}/users/${USER_ID}/vanguard/runs/${runId}/live` as const;
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await fetch(pollUrl, withApiKey());
+        if (!res.ok) return;
+        const live: LiveResponse = await res.json();
+        if (live.sessions.length > 0 || live.expected_total > 0) {
+          setRun((prev) => {
+            const base = prev || { run_id: runId, total: 0, passed: 0, failed: 0, pass_rate: 0 };
+            const ps   = live.sessions.filter((s) => s.status === "passed").length;
+            const fs   = live.sessions.filter((s) => s.status === "failed").length;
+            return {
+              ...base,
+              sessions:  live.sessions,
+              total:     live.expected_total || live.sessions.length,
+              passed: ps, failed: fs,
+              pass_rate: live.sessions.length > 0 ? ps / live.sessions.length : 0,
+            };
+          });
+        }
+        if (live.complete) {
+          window.clearInterval(timer); setRunId(null); refreshDashboard(); fetchStatus();
+          const ps   = live.sessions.filter((s) => s.status === "passed").length;
+          const rate = live.sessions.length > 0 ? ps / live.sessions.length : 0;
+          if (autoLoopActiveRef.current && rate < 0.8 && autoLoopCycleRef.current < 5) {
+            autoLoopCycleRef.current += 1;
+            setAutoLoopCycle(autoLoopCycleRef.current); setAutoLoopRunning(true);
+            setTimeout(async () => {
+              try { await fetch(`${API_BASE}/users/${USER_ID}/vanguard/improve`, withApiKey({ method: "POST" })); } catch { /* best-effort */ }
+              setTimeout(async () => {
+                if (!autoLoopActiveRef.current) { setAutoLoopRunning(false); return; }
+                try {
+                  const r = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/run`, withApiKey({ method: "POST" }));
+                  if (r.ok) {
+                    const p = await r.json();
+                    setRun({ run_id: p.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
+                    setExpandedGridSession(new Set()); setRunId(p.run_id); refreshDashboard();
+                  }
+                } catch { /* best-effort */ }
+                setAutoLoopRunning(false);
+              }, 22000);
+            }, 1500);
+          } else {
+            setAutoLoopRunning(false);
+            if (autoLoopCycleRef.current >= 5 || rate >= 0.8) { setAutoLoopActive(false); autoLoopActiveRef.current = false; }
+          }
+        }
+      } catch { /* silent */ }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [runId]);
+
+  useEffect(() => {
+    if (improvementRunning && chartData.length > improveStartCount.current) {
+      setImprovementRunning(false);
+      if (improvePollRef.current) { clearInterval(improvePollRef.current); improvePollRef.current = null; }
+    }
+  }, [improvementRunning, chartData.length]);
+
+  useEffect(() => {
+    return () => { if (improvePollRef.current) clearInterval(improvePollRef.current); };
+  }, []);
+
+  /* ════════════════ RENDER ════════════════════════════════ */
   return (
-    <div className={inter.className} style={{ minHeight: "100vh", display: "flex", background: "#0c0c0d", color: "#f4f4f5" }}>
+    <div
+      className="bg-paper text-ink"
+      style={{ minHeight: "100vh", display: "flex" }}
+    >
       <style>{`
         @keyframes vg-pop-in {
-          from { opacity: 0; transform: scale(0.82) translateY(10px); }
-          to   { opacity: 1; transform: scale(1)    translateY(0);    }
+          from { opacity: 0; transform: scale(0.88) translateY(8px); }
+          to   { opacity: 1; transform: scale(1)    translateY(0);   }
         }
-        @keyframes vg-wave-a {
-          0%,100% { height: 3px; } 50% { height: 18px; }
-        }
-        @keyframes vg-wave-b {
-          0%,100% { height: 5px; } 50% { height: 14px; }
-        }
-        @keyframes vg-wave-c {
-          0%,100% { height: 2px; } 50% { height: 20px; }
-        }
-        @keyframes vg-wave-d {
-          0%,100% { height: 6px; } 50% { height: 12px; }
-        }
+        @keyframes vg-wave-a { 0%,100% { height: 3px;  } 50% { height: 18px; } }
+        @keyframes vg-wave-b { 0%,100% { height: 5px;  } 50% { height: 14px; } }
+        @keyframes vg-wave-c { 0%,100% { height: 2px;  } 50% { height: 20px; } }
+        @keyframes vg-wave-d { 0%,100% { height: 6px;  } 50% { height: 12px; } }
+
         @keyframes vg-glow-green {
-          0%,100% { box-shadow: 0 0 6px rgba(34,197,94,0.15),  inset 0 0 0 0 transparent; }
-          50%      { box-shadow: 0 0 18px rgba(34,197,94,0.35), inset 0 0 0 0 transparent; }
+          0%,100% { box-shadow: 0 0 8px rgba(62,122,69,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(62,122,69,0.28); }
         }
         @keyframes vg-glow-red {
-          0%,100% { box-shadow: 0 0 6px rgba(239,68,68,0.15); }
-          50%      { box-shadow: 0 0 18px rgba(239,68,68,0.35); }
+          0%,100% { box-shadow: 0 0 8px rgba(181,67,43,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(181,67,43,0.28); }
         }
+        @keyframes glow-green {
+          0%,100% { box-shadow: 0 0 8px rgba(62,122,69,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(62,122,69,0.28); }
+        }
+        @keyframes glow-red {
+          0%,100% { box-shadow: 0 0 8px rgba(181,67,43,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(181,67,43,0.28); }
+        }
+        @keyframes glow-purple {
+          0%,100% { box-shadow: 0 0 8px rgba(180,90,53,0.12); }
+          50%      { box-shadow: 0 0 22px rgba(180,90,53,0.28); }
+        }
+        @keyframes pulse-dot {
+          0%,100% { opacity: 1; transform: scale(1);   }
+          50%      { opacity: 0.5; transform: scale(0.7); }
+        }
+        @keyframes pulse-ring {
+          0%   { box-shadow: 0 0 0 0 rgba(62,122,69,0.35); }
+          70%  { box-shadow: 0 0 0 8px rgba(62,122,69,0); }
+          100% { box-shadow: 0 0 0 0 rgba(62,122,69,0); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+
+        .forge-btn-primary { display:inline-flex; align-items:center; gap:6px; background:var(--clay); color:#fff; font-size:13px; font-weight:600; padding:8px 16px; border-radius:var(--radius-sm); border:none; cursor:pointer; transition:background 0.15s; }
+        .forge-btn-primary:hover { background:var(--clay-deep); }
+        .forge-btn-primary:disabled { opacity:0.45; cursor:not-allowed; }
+
+        .forge-btn-secondary { display:inline-flex; align-items:center; gap:6px; background:var(--surface); color:var(--ink-2); font-size:13px; font-weight:500; padding:8px 14px; border-radius:var(--radius-sm); border:1px solid var(--border); cursor:pointer; transition:background 0.15s; }
+        .forge-btn-secondary:hover { background:var(--surface-2); }
+        .forge-btn-secondary.active { background:var(--clay-tint); border-color:var(--clay); color:var(--clay-deep); }
+
+        .forge-btn-success { display:inline-flex; align-items:center; gap:6px; background:var(--status-green); color:#fff; font-size:13px; font-weight:600; padding:8px 16px; border-radius:var(--radius-sm); border:none; cursor:pointer; }
+        .forge-btn-success:disabled { opacity:0.45; cursor:not-allowed; }
+
+        .forge-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; }
+        .forge-section-label { font-family:var(--font-mono),ui-monospace,monospace; font-size:10px; letter-spacing:0.15em; color:var(--clay); font-weight:600; margin-bottom:10px; }
+        .forge-textarea { width:100%; height:280px; resize:vertical; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:12px 14px; font-size:12px; font-family:var(--font-mono),ui-monospace,monospace; color:var(--ink); line-height:1.6; outline:none; transition:border-color 0.15s; }
+        .forge-textarea:focus { border-color:var(--clay); }
+        .forge-input { flex:1; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 12px; font-size:13px; color:var(--ink); outline:none; transition:border-color 0.15s; }
+        .forge-input:focus { border-color:var(--clay); background:var(--surface); }
+        .forge-nav-btn { display: flex; align-items: center; gap: 9px; padding: 9px 12px; font-size: 13px; color: var(--ink-2); background: transparent; border-radius: var(--radius-sm); border: none; cursor: pointer; text-align: left; transition: all 0.15s; width: 100%; }
+        .forge-nav-btn:hover { background: var(--surface); color: var(--ink); }
+        .forge-nav-btn.active { background: var(--clay-tint); color: var(--clay-deep); font-weight: 600; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
       `}</style>
-      {/* SIDEBAR */}
+      {/* ── SIDEBAR ─────────────────────────────────────── */}
       <aside style={{
-        width: 240, position: "fixed", top: 0, left: 0, bottom: 0,
-        background: "#0c0c0d", borderRight: "1px solid #1f1f23",
-        display: "flex", flexDirection: "column", padding: "24px 16px", zIndex: 50,
+        width: 244, position: "fixed", top: 0, left: 0, bottom: 0,
+        background: "var(--surface-2)", borderRight: "1px solid var(--border)",
+        display: "flex", flexDirection: "column", padding: "20px 16px", zIndex: 50,
       }}>
-        <div style={{ marginBottom: 32 }}>
-          <div style={{ letterSpacing: "0.15em", fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 2 }}>FORGE</div>
-          <div style={{ fontSize: 11, color: "#71717a" }}>Voice Agent Infrastructure</div>
+        {/* Brand */}
+        <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 24, padding: "0 8px" }}>
+          <span style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)" }}>
+            FORGE
+          </span>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--clay)" }} />
         </div>
-        <nav style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-          {SIDEBAR_NAV.map((item) => {
-            const isActive = activeSection === item.id;
+
+        {/* Nav */}
+        <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
+          {SIDEBAR_NAV.map(({ id, label, Icon }) => {
+            const isActive = activeSection === id;
             return (
               <button
-                key={item.id}
-                onClick={() => scrollTo(item.id)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
-                  fontSize: 14, color: isActive ? "#f4f4f5" : "#a1a1aa",
-                  borderLeft: isActive ? "2px solid #7c3aed" : "2px solid transparent",
-                  background: "transparent", borderTop: 0, borderRight: 0, borderBottom: 0,
-                  cursor: "pointer", textAlign: "left", borderRadius: 0,
-                  transition: "color 0.15s",
-                }}
+                key={id}
+                onClick={() => scrollTo(id)}
+                className={`forge-nav-btn ${isActive ? "active" : ""}`}
               >
-                {item.label}
+                <Icon size={14} color={isActive ? "var(--clay-deep)" : "var(--ink-3)"} />
+                {label}
               </button>
             );
           })}
         </nav>
-        <div style={{ borderTop: "1px solid #1f1f23", paddingTop: 16, marginTop: "auto" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusDotColor, display: "inline-block" }} />
-            <span style={{ fontSize: 11, color: "#71717a" }}>System</span>
+
+        {/* Status footer */}
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+            <div style={{
+              width: 7, height: 7, borderRadius: "50%",
+              background: statusDotColor,
+              boxShadow: `0 0 8px ${statusDotColor}`,
+              animation: systemStatusColor === "green" ? "pulse-dot 2s ease-in-out infinite" : "none",
+            }} />
+            <span style={{ fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+              {systemStatusColor === "green" ? "All Systems Ready"
+               : systemStatusColor === "amber" ? "Partial Setup"
+               : systemStatusColor === "red"   ? "Not Configured"
+               : "Checking…"}
+            </span>
           </div>
-          <div style={{ fontSize: 11, color: "#52525b" }}>Last updated {formatTime(lastUpdated)}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+            <Clock size={9} />
+            <span>{formatTime(lastUpdated)}</span>
+          </div>
         </div>
       </aside>
 
-      {/* MAIN */}
-      <main style={{ marginLeft: 240, flex: 1, padding: "32px 48px", maxWidth: 1100 }}>
-        {/* ERROR TOAST */}
-        {error && (
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            background: "#1a0505", border: "1px solid #7f1d1d", color: "#fca5a5",
-            padding: "10px 16px", borderRadius: 6, marginBottom: 24, fontSize: 13,
-          }}>
-            <span>{error}</span>
-            <button onClick={() => setError(null)} style={{
-              background: "transparent", border: "none", color: "#fca5a5", cursor: "pointer", padding: 0, marginLeft: 12,
-            }}>
-              <XCircle size={16} />
-            </button>
-          </div>
-        )}
+      {/* ── MAIN ────────────────────────────────────────── */}
+      <main style={{ marginLeft: 244, flex: 1, padding: "36px 52px", maxWidth: 1180 }}>
 
-        {/* SECTION 1: BUILD */}
-        <section id="build" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Build</h2>
-            <button
-              onClick={uploadAndBuild}
-              disabled={!rawText.trim() || busy === "build"}
+        {/* Error toast */}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18 }}
               style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: busy === "build" ? "#5b21b6" : "#7c3aed",
-                color: "#fff", fontSize: 13, fontWeight: 500,
-                padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "build" ? "not-allowed" : "pointer",
-                opacity: !rawText.trim() && busy !== "build" ? 0.5 : 1,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                background: "var(--surface)", border: "1.5px solid var(--status-red)",
+                color: "var(--status-red)", padding: "10px 16px", borderRadius: "var(--radius-md)", marginBottom: 24,
+                fontSize: 13, boxShadow: "0 4px 20px rgba(181,67,43,0.12)",
               }}
             >
-              {busy === "build" ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <AlertTriangle size={14} color="var(--status-red)" />
+                <span>{error}</span>
+              </div>
+              <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: "var(--status-red)", cursor: "pointer", padding: 0, marginLeft: 12 }}>
+                <XCircle size={15} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ══════════════ BUILD ══════════════════════════ */}
+        <section id="build" style={{ marginBottom: 64, scrollMarginTop: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 9,
+                background: "var(--clay-tint)",
+                border: "1px solid rgba(180, 90, 53, 0.35)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <Zap size={15} color="var(--clay-deep)" />
+              </div>
+              <div>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2, letterSpacing: "-0.01em" }}>Build</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Ingest transcripts · extract personality · fine-tune</p>
+              </div>
+            </div>
+            <button
+              onClick={uploadAndBuild}
+              disabled={!files.length || busy === "build"}
+              className="forge-btn-primary"
+            >
+              {busy === "build" ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
               Start Build
             </button>
           </div>
 
-          {/* TRANSCRIPT TEXT INPUT */}
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#71717a" }}>Paste call transcripts (CALLER: / AGENT: format)</span>
-              {rawText.trim().length > 0 && (
-                <button onClick={() => setRawText("")} style={{
-                  background: "transparent", border: "none", color: "#52525b", cursor: "pointer",
-                  fontSize: 11, display: "inline-flex", alignItems: "center", gap: 4, padding: 0,
-                }}>
-                  <XCircle size={12} /> Clear
-                </button>
-              )}
-            </div>
-            <textarea
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              placeholder={"=== CALL 1 ===\nCALLER: Hi, I'd like to check my balance.\nAGENT: Of course! Can I verify your identity?\n\n=== CALL 2 ===\n..."}
-              style={{
-                width: "100%", height: 280, background: "#141416",
-                border: rawText.trim() ? "1px solid #3f3f46" : "1px solid #1f1f23",
-                borderRadius: 8, padding: "12px 14px", fontSize: 12,
-                fontFamily: "ui-monospace, SFMono-Regular, monospace",
-                color: "#f4f4f5", resize: "vertical", outline: "none",
-                lineHeight: 1.6, boxSizing: "border-box",
-              }}
-              onFocus={(e) => { e.target.style.borderColor = "#7c3aed"; }}
-              onBlur={(e) => { e.target.style.borderColor = rawText.trim() ? "#3f3f46" : "#1f1f23"; }}
-            />
-            {rawText.trim().length > 0 && (
-              <div style={{ fontSize: 10, color: "#52525b", marginTop: 4 }}>
-                {rawText.trim().split("\n").filter(l => l.startsWith("CALLER:") || l.startsWith("AGENT:")).length} turns detected
-              </div>
-            )}
-          </div>
-
-          {/* PIPELINE STEPPER */}
-          <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 20 }}>
-            {BUILD_STEPS.map((step, i) => {
-              const done = completedSteps.includes(step);
-              const isLast = i === BUILD_STEPS.length - 1;
-              return (
-                <div key={step} style={{ display: "flex", alignItems: "center", flex: isLast ? 0 : 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                    <div style={{
-                      width: 20, height: 20, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
-                      background: done ? "#7c3aed" : "#1f1f23",
-                      boxShadow: !done && activeStepIdx === i ? "0 0 0 2px #f59e0b" : "none",
-                      transition: "background 0.3s",
+          {/* Drop zone */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setIsDragging(false); setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files || [])]); }}
+            style={{
+              border: `2px dashed ${isDragging ? "var(--clay)" : "var(--border)"}`,
+              background: isDragging ? "var(--clay-tint)" : "var(--surface-2)",
+              borderRadius: "var(--radius-lg)", minHeight: 136,
+              display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center",
+              padding: 24, marginBottom: 20,
+              transition: "all 0.2s",
+              boxShadow: isDragging ? "0 0 0 4px rgba(180,90,53,0.15)" : "none",
+            }}
+          >
+            <label htmlFor="file-input" style={{ cursor: "pointer", width: "100%", textAlign: "center" }}>
+              {files.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
+                  {files.map((file, i) => (
+                    <span key={i} style={{
+                      display: "inline-flex", alignItems: "center", gap: 5,
+                      background: "var(--surface)", border: "1px solid var(--border)",
+                      padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--ink)",
                     }}>
-                      {done ? <CheckCircle2 size={14} color="#fff" /> : <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#3f3f46" }} />}
-                    </div>
-                    <span style={{ fontSize: 11, color: done ? "#f4f4f5" : "#52525b" }}>{step}</span>
-                  </div>
-                  {!isLast && <div style={{ flex: 1, height: 1, background: "#27272a", margin: "0 8px" }} />}
+                      {file.name}
+                      <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }}
+                        style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex" }}
+                      >
+                        <XCircle size={12} />
+                      </button>
+                    </span>
+                  ))}
+                  <span style={{ fontSize: 12, color: "var(--clay)", fontWeight: 600, cursor: "pointer" }}>+ Add more</span>
                 </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                  <UploadCloud size={28} color="var(--clay)" style={{ marginBottom: 10 }} />
+                  <div style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>or click to browse</div>
+                </div>
+              )}
+            </label>
+          </div>
+          <input
+            id="file-input" className="sr-only" type="file" multiple
+            accept="audio/*,.txt,.eml,.json,.csv,.pdf,.docx"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFiles((prev) => [...prev, ...Array.from(e.target.files || [])])}
+          />
+
+          {/* Pipeline stepper */}
+          <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 24 }}>
+            {BUILD_STEPS.map((step, i) => {
+              const done     = completedSteps.includes(step);
+              const isActive = !done && activeStepIdx === i;
+              const isLast   = i === BUILD_STEPS.length - 1;
+              return (
+                <React.Fragment key={step}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                    <div style={{
+                      width: 26, height: 26, borderRadius: "50%",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      background: done ? "var(--clay)" : "var(--surface-2)",
+                      border: done ? "none" : isActive ? "none" : "1px solid var(--border)",
+                      boxShadow: isActive ? "0 0 0 2px var(--status-amber)" : "none",
+                      transition: "all 0.3s", flexShrink: 0,
+                    }}>
+                      {done ? <CheckCircle2 size={13} color="#fff" />
+                        : isActive ? <Loader2 size={12} color="var(--status-amber)" className="animate-spin" />
+                        : <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--border)" }} />}
+                    </div>
+                    <span style={{
+                      fontSize: 11, textAlign: "center", whiteSpace: "nowrap",
+                      fontFamily: "var(--font-mono)",
+                      color: done ? "var(--ink)" : "var(--ink-3)",
+                      transition: "color 0.3s", maxWidth: 72,
+                      overflow: "hidden", textOverflow: "ellipsis",
+                    }}>
+                      {step}
+                    </span>
+                  </div>
+                  {!isLast && (
+                    <div style={{
+                      flex: 1, height: 2, marginTop: 12, marginBottom: 20,
+                      background: "var(--border)",
+                      transition: "background 0.4s",
+                    }} />
+                  )}
+                </React.Fragment>
               );
             })}
           </div>
 
-          {/* SYSTEM STATUS 2x3 GRID */}
+          {/* Status grid */}
           {statusInfo && (
-            <div style={{
-              display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 16,
-            }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 20 }}>
               {statusItems.map((item) => (
                 <div key={item.key} style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  background: "#141416", border: "1px solid #1f1f23", borderRadius: 6,
-                  padding: "8px 12px", fontSize: 12,
+                  display: "flex", alignItems: "center", gap: 8,
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)", padding: "8px 12px", transition: "all 0.3s",
                 }}>
-                  <span style={{
-                    width: 6, height: 6, borderRadius: "50%",
-                    background: item.ready ? "#22c55e" : "#52525b",
-                    display: "inline-block", flexShrink: 0,
+                  <div style={{
+                    width: 7, height: 7, borderRadius: "50%",
+                    background: item.ready ? "var(--status-green)" : "var(--ink-3)",
+                    flexShrink: 0,
                   }} />
-                  <span style={{ color: item.ready ? "#f4f4f5" : "#52525b" }}>{item.label}</span>
-                  <span style={{ marginLeft: "auto", color: item.ready ? "#22c55e" : "#52525b", fontSize: 10 }}>
-                    {item.ready ? "Ready" : "—"}
+                  <span style={{ fontSize: 13, color: item.ready ? "var(--ink)" : "var(--ink-3)", flex: 1 }}>{item.label}</span>
+                  <span style={{ fontSize: 10, color: item.ready ? "var(--status-green)" : "var(--ink-3)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                    {item.ready ? "ready" : "—"}
                   </span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* BUILD RESULTS PANEL */}
+          {/* Build results */}
           {buildComplete && personalitySpec && (
-            <div style={{
-              display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 16,
-            }}>
-              <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 8 }}>Personality</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-                  <div style={{ color: "#71717a" }}>
-                    Formality: <span style={{ color: "#f4f4f5" }}>
-                      {(personalitySpec.communication_style as Record<string, unknown>)?.formality != null
-                        ? String((personalitySpec.communication_style as Record<string, unknown>).formality) : "—"}
-                    </span>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
+              <div className="forge-card">
+                <div className="forge-section-label">Personality</div>
+                {[
+                  ["Formality", (personalitySpec.communication_style as Record<string,unknown>)?.formality],
+                  ["Hedging",   (personalitySpec.communication_style as Record<string,unknown>)?.hedging_frequency],
+                  ["Humor",     (personalitySpec.communication_style as Record<string,unknown>)?.humor_style],
+                ].map(([lbl, val]) => val != null ? (
+                  <div key={String(lbl)} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: "var(--ink-2)" }}>
+                    <span>{String(lbl)}</span>
+                    <span style={{ color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{String(val)}</span>
                   </div>
-                  <div style={{ color: "#71717a" }}>
-                    Hedging: <span style={{ color: "#f4f4f5" }}>
-                      {(personalitySpec.communication_style as Record<string, unknown>)?.hedging_frequency != null
-                        ? String((personalitySpec.communication_style as Record<string, unknown>).hedging_frequency) : "—"}
-                    </span>
-                  </div>
-                  <div style={{ color: "#71717a" }}>
-                    Humor: <span style={{ color: "#f4f4f5" }}>
-                      {(personalitySpec.communication_style as Record<string, unknown>)?.humor_style != null
-                        ? String((personalitySpec.communication_style as Record<string, unknown>).humor_style) : "—"}
-                    </span>
-                  </div>
-                  <div style={{ color: "#71717a" }}>
-                    Domains: <span style={{ color: "#f4f4f5" }}>
-                      {(() => {
-                        const domains = personalitySpec.knowledge_domains;
-                        if (Array.isArray(domains)) {
-                          return (domains as Array<{domain: string}>).slice(0, 2).map(d => d.domain).join(", ");
-                        }
-                        if (typeof domains === "string") return domains;
-                        return "—";
-                      })()}
-                    </span>
-                  </div>
+                ) : null)}
+                {(() => {
+                  const domains = personalitySpec.knowledge_domains;
+                  let txt = "—";
+                  if (Array.isArray(domains)) txt = (domains as Array<{domain:string}>).slice(0,2).map(d=>d.domain).join(", ");
+                  if (typeof domains === "string") txt = domains;
+                  return (
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--ink-2)" }}>
+                      <span>Domains</span>
+                      <span style={{ color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{txt}</span>
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="forge-card">
+                <div className="forge-section-label">Gemini Voice</div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: "var(--ink-2)" }}>
+                  <span>Voice</span>
+                  <span style={{ color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{dashboard.gemini_voice || "Puck"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--ink-2)" }}>
+                  <span>Runtime</span>
+                  <span style={{ color: "var(--status-green)", fontWeight: 600, fontSize: 11 }}>Gemini Live</span>
                 </div>
               </div>
-              <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 8 }}>Gemini Voice</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-                  <div style={{ color: "#71717a" }}>
-                    Voice: <span style={{ color: "#f4f4f5", fontFamily: "monospace", fontSize: 11 }}>
-                      {dashboard.gemini_voice || "Puck"}
-                    </span>
-                  </div>
-                  <div style={{ color: "#71717a" }}>
-                    Runtime: <span style={{ color: "#22c55e" }}>Gemini Live</span>
-                    {dashboard.voice_id && <span style={{ color: "#52525b", marginLeft: 4 }}>(legacy clone available)</span>}
-                  </div>
+              <div className="forge-card">
+                <div className="forge-section-label">RAG</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: statusInfo?.rag_ready ? "var(--status-green)" : "var(--ink-3)" }}>
+                  {statusInfo?.rag_ready ? "Knowledge base ready" : "Not ready"}
                 </div>
               </div>
-              <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 8 }}>RAG</div>
-                <div style={{ fontSize: 12, color: statusInfo?.rag_ready ? "#22c55e" : "#52525b" }}>
-                  {statusInfo?.rag_ready ? "Knowledge base built" : "Not ready"}
-                </div>
-              </div>
-              <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 8 }}>Fine-tune</div>
-                <div style={{ fontSize: 12, color: dashboard.adapter_id ? "#22c55e" : "#52525b" }}>
+              <div className="forge-card">
+                <div className="forge-section-label">Fine-tune</div>
+                <div style={{ fontSize: 12 }}>
                   {dashboard.adapter_id
-                    ? <span style={{ fontFamily: "monospace", fontSize: 11 }}>{dashboard.adapter_id.slice(0, 24)}...</span>
-                    : "Base model (fine-tune skipped)"}
+                    ? <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--status-green)" }}>{dashboard.adapter_id.slice(0,26)}…</span>
+                    : <span style={{ color: "var(--ink-3)" }}>Base model (no fine-tune)</span>}
                 </div>
               </div>
             </div>
           )}
-          {/* TRANSCRIPT QUALITY SCORES */}
+
+          {/* Transcript quality */}
           {transcriptScores && (
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16, marginBottom: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600 }}>Transcript Quality Scores</div>
-                <div style={{ fontSize: 12, color: "#22c55e" }}>
-                  Overall: <span style={{ fontWeight: 600 }}>{Math.round(transcriptScores.aggregate_score * 10)}%</span>
-                  <span style={{ color: "#52525b", marginLeft: 8, fontSize: 10 }}>
-                    {transcriptScores.top_k_turns?.length ?? 0} golden segments selected
+            <div className="forge-card">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div className="forge-section-label">TRANSCRIPT QUALITY</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
+                  <span style={{ color: "var(--ink-2)" }}>
+                    Overall:&nbsp;
+                    <span style={{ color: "var(--status-green)", fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                      {Math.round(transcriptScores.aggregate_score * 10)}%
+                    </span>
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                    {transcriptScores.top_k_turns?.length ?? 0} golden segs
                   </span>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8 }}>
                 {Object.entries(transcriptScores.dimension_scores).map(([dim, score]) => {
-                  const pct = Math.round((score / 10) * 100);
-                  const color = pct >= 70 ? "#22c55e" : pct >= 40 ? "#f59e0b" : "#ef4444";
-                  const label = dim.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                  const pct   = Math.round((score / 10) * 100);
+                  const color = pct >= 70 ? "var(--status-green)" : pct >= 40 ? "var(--status-amber)" : "var(--status-red)";
+                  const label = DIMENSION_LABELS[dim] || dim.replace(/_/g," ").replace(/\b\w/g,(c)=>c.toUpperCase());
                   return (
-                    <div key={dim} style={{ background: "#0c0c0d", border: "1px solid #1f1f23", borderRadius: 6, padding: "8px 10px" }}>
-                      <div style={{ fontSize: 10, color: "#71717a", marginBottom: 4 }}>{label}</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color }}>{pct}%</div>
-                      <div style={{ height: 3, background: "#1f1f23", borderRadius: 2, marginTop: 4 }}>
-                        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2 }} />
+                    <div key={dim} style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ink-3)", letterSpacing: "0.04em", marginBottom: 4, lineHeight: 1.3 }}>{label}</div>
+                      <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color, lineHeight: 1, marginBottom: 6 }}>
+                        {pct}%
+                      </div>
+                      <div style={{ height: 3, background: "var(--border)", borderRadius: 2 }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg,${color}80,${color})`, borderRadius: 2 }} />
                       </div>
                     </div>
                   );
@@ -916,226 +1325,233 @@ export default function Page() {
           )}
         </section>
 
-        {/* SECTION 2: AGENT */}
-        <section id="agent" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Agent</h2>
+        {/* ══════════════ AGENT ══════════════════════════ */}
+        <section id="agent" style={{ marginBottom: 64, scrollMarginTop: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 9,
+                background: "color-mix(in srgb, var(--status-green) 12%, var(--surface))",
+                border: "1px solid color-mix(in srgb, var(--status-green) 30%, transparent)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <Phone size={15} color="var(--status-green)" />
+              </div>
+              <div>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Agent</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Voice call interface · live chat test</p>
+              </div>
+            </div>
             <button
               onClick={callAgent}
               disabled={busy === "call" || !agentReady}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: agentReady ? "#16a34a" : "#3f3f46", color: "#fff", fontSize: 13, fontWeight: 500,
-                padding: "8px 16px", borderRadius: 6, border: "none",
-                cursor: busy === "call" || !agentReady ? "not-allowed" : "pointer",
-                opacity: busy === "call" || !agentReady ? 0.6 : 1,
-              }}
+              className={agentReady ? "forge-btn-success" : "forge-btn-primary"}
             >
-              {busy === "call" ? <Loader2 size={14} className="animate-spin" /> : <Phone size={14} />}
-              Call Agent
+              {busy === "call" ? <Loader2 size={13} className="animate-spin" /> : <Phone size={13} />}
+              Live Demo Call
             </button>
           </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 11, color: "#71717a", marginBottom: 8 }}>Phone Number</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 20, fontFamily: "ui-monospace, SFMono-Regular, monospace", color: "#f4f4f5" }}>
-                  {callInfo?.phone_number || "—"}
+            <div className="forge-card">
+              <div className="forge-section-label">PHONE NUMBER</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 22, fontFamily: "var(--font-display)", fontWeight: 600, color: "var(--ink)", letterSpacing: "0.05em" }}>
+                  {callInfo?.phone_number || <span style={{ color: "var(--ink-3)" }}>—</span>}
                 </span>
                 {callInfo?.phone_number && (
-                  <button onClick={() => copyToClipboard(callInfo.phone_number, "phone")} style={{
-                    background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0,
-                  }}>
-                    <Copy size={14} />
-                    {copiedText === "phone" && <span style={{ fontSize: 10, color: "#22c55e", marginLeft: 4 }}>Copied!</span>}
+                  <button onClick={() => copyToClipboard(callInfo.phone_number, "phone")} style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Copy size={13} />
+                    {copiedText === "phone" && <span style={{ fontSize: 10, color: "var(--status-green)", fontFamily: "var(--font-mono)" }}>copied</span>}
                   </button>
                 )}
               </div>
             </div>
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-              <div style={{ fontSize: 11, color: "#71717a", marginBottom: 8 }}>Room URL</div>
+            <div className="forge-card">
+              <div className="forge-section-label">ROOM URL</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{
-                  fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, monospace", color: "#f4f4f5",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
-                }}>
-                  {callInfo?.room_url || "—"}
+                <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  {callInfo?.room_url || <span style={{ color: "var(--ink-3)" }}>—</span>}
                 </span>
                 {callInfo?.room_url && (
                   <>
-                    <button onClick={() => copyToClipboard(callInfo.room_url, "room")} style={{
-                      background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4,
-                    }}>
-                      <Copy size={14} />
-                      {copiedText === "room" && <span style={{ fontSize: 10, color: "#22c55e" }}>Copied!</span>}
+                    <button onClick={() => copyToClipboard(callInfo.room_url, "room")} style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Copy size={13} />
+                      {copiedText === "room" && <span style={{ fontSize: 10, color: "var(--status-green)", fontFamily: "var(--font-mono)" }}>copied</span>}
                     </button>
-                    <a href={callInfo.room_url} target="_blank" rel="noopener noreferrer" style={{
-                      display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#7c3aed", textDecoration: "none",
-                    }}>
-                      <Link size={14} /> Open
+                    <a href={callInfo.room_url} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--clay)", textDecoration: "none" }}>
+                      <LinkIcon size={13} /> Open
                     </a>
                   </>
                 )}
               </div>
             </div>
           </div>
-          {/* CHAT WIDGET */}
-          <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-            <div style={{ fontSize: 11, color: "#71717a", marginBottom: 12 }}>Live chat test &mdash; real NVIDIA NIM response</div>
+
+          {/* Chat widget */}
+          <div className="forge-card">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div className="forge-section-label">LIVE CHAT TEST</div>
+              <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Direct NVIDIA NIM · no caching</span>
+            </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <input
                 value={chatMessage}
                 onChange={(e) => setChatMessage(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") sendChat(); }}
-                onFocus={() => setChatFocused(true)}
-                onBlur={() => setChatFocused(false)}
-                placeholder="Type a message..."
-                style={{
-                  flex: 1, background: "#0c0c0d", border: chatFocused ? "1px solid #7c3aed" : "1px solid #1f1f23", borderRadius: 4,
-                  padding: "8px 12px", fontSize: 13, color: "#f4f4f5", outline: "none",
-                }}
+                placeholder="Type a message and press Enter…"
+                className="forge-input"
               />
               <button
                 onClick={sendChat}
                 disabled={!chatMessage.trim() || chatLoading}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  background: "#7c3aed", color: "#fff", fontSize: 13, fontWeight: 500,
-                  padding: "8px 16px", borderRadius: 4, border: "none",
-                  cursor: !chatMessage.trim() || chatLoading ? "not-allowed" : "pointer",
-                  opacity: !chatMessage.trim() || chatLoading ? 0.5 : 1,
-                }}
+                className="forge-btn-primary"
               >
-                {chatLoading ? <Loader2 size={14} className="animate-spin" /> : "Send"}
+                {chatLoading ? <Loader2 size={13} className="animate-spin" /> : "Send"}
               </button>
             </div>
-            {chatResponse && (
-              <div style={{
-                background: "#0c0c0d", border: "1px solid #1f1f23", borderRadius: 6, padding: 12, fontSize: 13, lineHeight: 1.5, color: "#f4f4f5",
-              }}>
-                {chatResponse}
-                {chatLatency !== null && (
-                  <div style={{ marginTop: 8, fontSize: 10, color: "#71717a" }}>{chatLatency}ms latency</div>
-                )}
-              </div>
-            )}
-            <div style={{ marginTop: 8, fontSize: 10, color: "#52525b" }}>Direct NVIDIA NIM call &mdash; no caching, no mocks.</div>
+            <AnimatePresence>
+              {chatResponse && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <div style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12, fontSize: 13, lineHeight: 1.6, color: "var(--ink)" }}>
+                    {chatResponse}
+                    {chatLatency !== null && (
+                      <div style={{ marginTop: 8, fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{chatLatency}ms</div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </section>
 
-        {/* SECTION 3: VANGUARD */}
-        <section id="vanguard" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
-          {/* Header row */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        {/* ══════════════ VANGUARD ═══════════════════════ */}
+        <section id="vanguard" style={{ marginBottom: 64, scrollMarginTop: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Vanguard</h2>
-              {total > 0 && (
-                <span style={{ fontSize: 13, color: passRate >= 60 ? "#22c55e" : "#ef4444" }}>
-                  {passed}/{total} passed ({passRate}%)
-                </span>
-              )}
-              {vanguardRunning && (
-                <span style={{ fontSize: 12, color: "#f59e0b", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <Loader2 size={12} className="animate-spin" />
-                  {passed + (activeRun?.failed || 0)}/{total} active
-                </span>
-              )}
-              {dashboard.attack_suite_size != null && dashboard.attack_suite_size > 0 && (
-                <span style={{ fontSize: 11, color: "#52525b" }}>{dashboard.attack_suite_size} variants</span>
-              )}
+              <div style={{
+                width: 32, height: 32, borderRadius: 9,
+                background: "color-mix(in srgb, var(--status-red) 12%, var(--surface))",
+                border: "1px solid color-mix(in srgb, var(--status-red) 30%, transparent)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <Shield size={15} color="var(--status-red)" />
+              </div>
+              <div>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Vanguard</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Adversarial attack suite · red-team evaluation</p>
+              </div>
+              {vanguardRunning && <div className="live-badge"><div className="live-dot" />LIVE</div>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {/* Auto-loop toggle */}
               <button
                 onClick={toggleAutoLoop}
-                title={autoLoopActive ? "Auto-loop ON — will keep improving until ≥80% pass" : "Click to enable auto-improvement loop"}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  background: autoLoopActive ? "#1c1917" : "transparent",
-                  border: `1px solid ${autoLoopActive ? "#f59e0b" : "#27272a"}`,
-                  color: autoLoopActive ? "#f59e0b" : "#52525b",
-                  fontSize: 12, fontWeight: 500, padding: "7px 12px", borderRadius: 6, cursor: "pointer",
-                  transition: "all 0.2s",
-                }}
+                title={autoLoopActive ? "Auto-loop ON" : "Enable auto-improvement loop"}
+                className={`forge-btn-secondary ${autoLoopActive ? "active" : ""}`}
               >
                 <Activity size={13} />
                 Auto-loop {autoLoopActive ? "ON" : "OFF"}
               </button>
               <button
                 onClick={launchAttack}
-                disabled={busy === "attack" || !agentReady}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  background: busy === "attack" || !agentReady ? "#3f3f46" : "#7c3aed",
-                  color: "#fff", fontSize: 13, fontWeight: 500,
-                  padding: "8px 16px", borderRadius: 6, border: "none",
-                  cursor: busy === "attack" || !agentReady ? "not-allowed" : "pointer",
-                  opacity: busy === "attack" || !agentReady ? 0.6 : 1,
-                }}
+                disabled={busy === "attack"}
+                className="forge-btn-primary"
               >
-                {busy === "attack" ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
+                {busy === "attack" ? <Loader2 size={13} className="animate-spin" /> : <Shield size={13} />}
                 Launch Attack
               </button>
             </div>
           </div>
 
-          {/* Auto-loop status banner */}
-          {(autoLoopRunning || (autoLoopActive && autoLoopCycle > 0)) && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 8,
-              background: "#1c1917", border: "1px solid #78350f",
-              borderRadius: 6, padding: "10px 16px", marginBottom: 16,
-            }}>
-              <Loader2 size={13} className="animate-spin" color="#f59e0b" />
-              <span style={{ fontSize: 13, color: "#fbbf24" }}>
-                Auto-improving — cycle {autoLoopCycle}/5
-                {autoLoopRunning && !vanguardRunning ? " · running improvement cycle…" : ""}
-              </span>
+          {/* Stats bar */}
+          {total > 0 && (
+            <div className="forge-card" style={{ display: "flex", alignItems: "center", gap: 20, padding: "14px 20px", marginBottom: 16 }}>
+              <PassRateRing rate={passRate} size={68} />
+              <div>
+                <div style={{
+                  fontSize: 32, fontWeight: 800, fontFamily: "var(--font-mono)", lineHeight: 1,
+                  color: passRate >= 60 ? "var(--status-green)" : "var(--status-red)",
+                }}>
+                  {passRate}%
+                </div>
+                <div style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: passRate >= 60 ? "var(--status-green)" : "var(--status-red)", marginTop: 4 }}>
+                  {passed} of {total} passed
+                  {vanguardRunning && (
+                    <span style={{ color: "var(--status-amber)", fontFamily: "var(--font-mono)", fontSize: 12, marginLeft: 10, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Loader2 size={11} className="animate-spin" />
+                      {passed + (activeRun?.failed || 0)}/{total} done
+                    </span>
+                  )}
+                </div>
+              </div>
+              {dashboard.attack_suite_size != null && dashboard.attack_suite_size > 0 && (
+                <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-mono)" }}>{dashboard.attack_suite_size}</div>
+                  <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>attack variants</div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* VANGUARD GRID */}
+          {/* Auto-loop banner */}
+          <AnimatePresence>
+            {(autoLoopRunning || (autoLoopActive && autoLoopCycle > 0)) && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.3)",
+                  borderRadius: "var(--radius-md)", padding: "10px 16px", marginBottom: 16,
+                }}
+              >
+                <Loader2 size={13} className="animate-spin" color="var(--clay)" />
+                <span style={{ fontSize: 13, color: "var(--clay-deep)" }}>
+                  Auto-improving — cycle {autoLoopCycle}/5
+                  {autoLoopRunning && !vanguardRunning ? " · running improvement cycle…" : ""}
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Attack grid */}
           {(sessions.length > 0 || attackSuite.length > 0 || (runId && total > 0)) ? (
-            <>
-              <VanguardGrid
-                suite={attackSuite}
-                sessions={sessions}
-                expectedTotal={total}
-                expandedSessions={expandedGridSession}
-                onToggleSession={toggleGridSession}
-              />
-            </>
+            <VanguardGrid
+              suite={attackSuite} sessions={sessions} expectedTotal={total}
+              expandedSessions={expandedGridSession} onToggleSession={toggleGridSession}
+            />
           ) : (
-            <div style={{
-              background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 48,
-              textAlign: "center", color: "#71717a", fontSize: 13, marginBottom: 16,
-            }}>
-              No sessions yet. Click &ldquo;Launch Attack&rdquo; to begin adversarial testing.
+            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 48, textAlign: "center" }}>
+              <Shield size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
+              <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
+                No sessions yet. Click &ldquo;Launch Attack&rdquo; to begin adversarial testing.
+              </p>
             </div>
           )}
 
-          {/* WORST PERSONAS */}
+          {/* Worst personas */}
           {worstPersonas.length > 0 && (
-            <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16, marginTop: 16 }}>
-              <div style={{ fontSize: 11, color: "#71717a", fontWeight: 600, marginBottom: 12 }}>Weakest Attack Categories</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div className="forge-card" style={{ marginTop: 16 }}>
+              <div className="forge-section-label">WEAKEST ATTACK CATEGORIES</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {worstPersonas.map((item) => {
-                  const pName = PERSONA_NAMES[item.persona] || item.persona;
+                  const pName   = PERSONA_NAMES[item.persona] || item.persona;
                   const ratePct = Math.round(item.pass_rate * 100);
+                  const color   = ratePct >= 60 ? "var(--status-green)" : ratePct >= 30 ? "var(--status-amber)" : "var(--status-red)";
                   return (
                     <div key={item.persona} style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
-                      <span style={{ width: 120, color: "#f4f4f5", flexShrink: 0 }}>{pName}</span>
-                      <span style={{ color: "#71717a", width: 80, flexShrink: 0 }}>{item.passed}/{item.runs} passed</span>
-                      <div style={{ flex: 1, height: 4, background: "#1f1f23", borderRadius: 2 }}>
-                        <div style={{
-                          width: `${ratePct}%`, height: "100%",
-                          background: ratePct >= 60 ? "#22c55e" : ratePct >= 30 ? "#f59e0b" : "#ef4444",
-                          borderRadius: 2,
-                        }} />
+                      <span style={{ width: 140, color: "var(--ink)", flexShrink: 0 }}>{pName}</span>
+                      <span style={{ color: "var(--ink-3)", width: 68, flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 11 }}>{item.passed}/{item.runs}</span>
+                      <div style={{ flex: 1, height: 5, background: "var(--surface-2)", borderRadius: 2 }}>
+                        <div style={{ width: `${ratePct}%`, height: "100%", background: color, borderRadius: 2, transition: "width 0.5s" }} />
                       </div>
-                      <span style={{ color: ratePct >= 60 ? "#22c55e" : ratePct >= 30 ? "#f59e0b" : "#ef4444", width: 32, textAlign: "right" }}>
-                        {ratePct}%
-                      </span>
+                      <span style={{ color, width: 34, textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>{ratePct}%</span>
                     </div>
                   );
                 })}
@@ -1144,60 +1560,86 @@ export default function Page() {
           )}
         </section>
 
-        {/* SECTION 4: IMPROVEMENT */}
-        <section id="improvement" style={{ marginBottom: 48, scrollMarginTop: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Improvement Curve</h2>
-              <span style={{ fontSize: 13, color: "#71717a" }}>{cyclesRun} cycle{cyclesRun !== 1 ? "s" : ""} run</span>
+        {/* ══════════════ IMPROVEMENT ════════════════════ */}
+        <section id="improvement" style={{ marginBottom: 64, scrollMarginTop: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 9,
+                background: "var(--clay-tint)",
+                border: "1px solid rgba(180, 90, 53, 0.35)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <TrendingUp size={15} color="var(--clay-deep)" />
+              </div>
+              <div>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--ink)", margin: 0, fontWeight: 600, lineHeight: 1.2 }}>Improvement Curve</h2>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
+                  <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0 }}>RL hardening · pass rate over iterations</p>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--ink-3)" }}>
+                    ({cyclesRun} cycle{cyclesRun !== 1 ? "s" : ""} run)
+                  </span>
+                </div>
+              </div>
             </div>
             <button
               onClick={improve}
               disabled={busy === "improve"}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: busy === "improve" ? "#5b21b6" : "#7c3aed",
-                color: "#fff", fontSize: 13, fontWeight: 500,
-                padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "improve" ? "not-allowed" : "pointer",
-                opacity: busy === "improve" ? 0.6 : 1,
-              }}
+              className="forge-btn-primary"
             >
-              {busy === "improve" ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
-              Run Improvement Cycle
+              {busy === "improve" ? <Loader2 size={13} className="animate-spin" /> : <Activity size={13} />}
+              Run Cycle
             </button>
           </div>
-          {improvementRunning && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#1c1917", border: "1px solid #78350f", borderRadius: 6, padding: "10px 16px", marginBottom: 16 }}>
-              <Loader2 size={14} className="animate-spin" color="#f59e0b" />
-              <span style={{ fontSize: 13, color: "#fbbf24" }}>Improvement cycle running &mdash; results will appear when complete.</span>
-            </div>
-          )}
+
+          <AnimatePresence>
+            {improvementRunning && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.3)",
+                  borderRadius: "var(--radius-md)", padding: "10px 16px", marginBottom: 16,
+                }}
+              >
+                <Loader2 size={13} className="animate-spin" color="var(--clay)" />
+                <span style={{ fontSize: 13, color: "var(--clay-deep)" }}>
+                  Improvement cycle running — results will appear when complete.
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {chartData.length > 0 ? (
             <>
-              <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16, height: 288, marginBottom: 16 }}>
+              <div style={{ height: 288, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16, marginBottom: 14 }}>
                 <ImprovementChartNoSsr data={chartData} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {chartData.map((point) => {
-                  const histItem = dashboard.pass_rate_history?.find((h) => h.cycle === point.cycle);
+                  const histItem  = dashboard.pass_rate_history?.find((h) => h.cycle === point.cycle);
                   const regPassed = histItem?.regression_passed;
+                  const pr        = point.passRate != null ? Math.round(point.passRate) : null;
                   return (
                     <div key={point.cycle} style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "8px 12px", background: "#141416", border: "1px solid #1f1f23", borderRadius: 6, fontSize: 12,
+                      padding: "8px 14px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12,
                     }}>
-                      <span style={{ color: "#71717a" }}>Cycle {point.cycle}</span>
-                      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                      <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Cycle {point.cycle}</span>
+                      <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
                         {regPassed !== undefined && (
-                          <span style={{
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                            color: regPassed ? "#22c55e" : "#ef4444",
-                          }}>
-                            {regPassed ? "Gate \u2713" : "Gate \u2717"}
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: regPassed ? "var(--status-green)" : "var(--status-red)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                            Gate {regPassed ? "✓" : "✗"}
                           </span>
                         )}
-                        <span style={{ color: "#7c3aed" }}>{point.passRate != null ? `${Math.round(point.passRate)}%` : "—"} pass</span>
-                        <span style={{ color: "#a1a1aa" }}>{point.suiteSize ?? "—"} variants</span>
+                        <span style={{ color: "var(--clay)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                          {pr != null ? `${pr}%` : "—"} pass
+                        </span>
+                        <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                          {point.suiteSize ?? "—"} variants
+                        </span>
                       </div>
                     </div>
                   );
@@ -1205,309 +1647,15 @@ export default function Page() {
               </div>
             </>
           ) : (
-            <div style={{
-              background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 48,
-              textAlign: "center",
-            }}>
-              <Shield size={32} style={{ color: "#52525b", marginBottom: 12 }} />
-              <p style={{ fontSize: 13, color: "#71717a", margin: 0 }}>
-                No improvement cycles yet. Run Vanguard first, then run an improvement cycle to see hardening progress.
+            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 56, textAlign: "center" }}>
+              <TrendingUp size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
+              <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
+                No improvement cycles yet. Run Vanguard first, then run a cycle to see hardening progress.
               </p>
             </div>
           )}
         </section>
       </main>
-    </div>
-  );
-}
-
-function ScorePill({ label, value }: { label: string; value?: number }) {
-  if (value == null) return null;
-  const color = value >= 70 ? "#22c55e" : value >= 40 ? "#f59e0b" : "#ef4444";
-  return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 4,
-      background: "#0c0c0d", border: "1px solid #1f1f23", borderRadius: 6,
-      padding: "4px 8px", fontSize: 11,
-    }}>
-      <span style={{ color: "#71717a" }}>{label}:</span>
-      <span style={{ color, fontWeight: 600 }}>{value}%</span>
-    </div>
-  );
-}
-
-// ─── Vanguard Grid Components ──────────────────────────────────────────────────
-
-const WAVE_CONFIGS = [
-  { anim: "vg-wave-a", dur: "0.72s", delay: "0ms"   },
-  { anim: "vg-wave-c", dur: "0.95s", delay: "70ms"  },
-  { anim: "vg-wave-b", dur: "0.81s", delay: "140ms" },
-  { anim: "vg-wave-d", dur: "0.68s", delay: "30ms"  },
-  { anim: "vg-wave-a", dur: "1.05s", delay: "200ms" },
-  { anim: "vg-wave-c", dur: "0.77s", delay: "110ms" },
-  { anim: "vg-wave-b", dur: "0.90s", delay: "260ms" },
-  { anim: "vg-wave-d", dur: "0.65s", delay: "55ms"  },
-];
-
-function Waveform({ color, active }: { color: string; active: boolean }) {
-  return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 22 }}>
-      {WAVE_CONFIGS.map((cfg, i) => (
-        <div
-          key={i}
-          style={{
-            width: 3, borderRadius: 2,
-            background: active ? color : "#27272a",
-            height: active ? undefined : 3,
-            minHeight: 3,
-            animation: active
-              ? `${cfg.anim} ${cfg.dur} ease-in-out ${cfg.delay} infinite alternate`
-              : "none",
-            transition: "background 0.4s",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function VanguardCard({
-  session, personaName, index, isExpanded, onToggle,
-}: {
-  session: VanguardSession | null;
-  personaName: string;
-  index: number;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  const status = session?.status ?? "queued";
-  const isPassed  = status === "passed";
-  const isFailed  = status === "failed";
-  const isRunning = status === "running";
-  const isDone    = isPassed || isFailed;
-  const score     = session?.overall_score != null ? Math.round(session.overall_score) : null;
-  const hasTx     = (session?.transcript?.turns?.length ?? 0) > 0;
-
-  const borderColor = isPassed ? "#22c55e" : isFailed ? "#ef4444" : isRunning ? "#6d28d9" : "#1f1f23";
-  const glowAnim    = isPassed ? "vg-glow-green 2.5s ease-in-out infinite"
-                    : isFailed ? "vg-glow-red 2.5s ease-in-out infinite"
-                    : "none";
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      <div
-        onClick={hasTx ? onToggle : undefined}
-        style={{
-          background: "#141416",
-          border: `${isDone ? 2 : 1}px solid ${borderColor}`,
-          borderRadius: 8,
-          padding: 14,
-          cursor: hasTx ? "pointer" : "default",
-          animation: `vg-pop-in 0.32s ease-out ${index * 65}ms both, ${glowAnim}`,
-          transition: "border-color 0.5s",
-          display: "flex", flexDirection: "column", gap: 10,
-          minHeight: 152,
-        }}
-      >
-        {/* Header: persona + status badge + listen link */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#f4f4f5", lineHeight: 1.3, flex: 1 }}>
-            {personaName}
-          </span>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-            {session?.room_url && (
-              <a
-                href={session.room_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                title="Open Daily room — join to listen live"
-                style={{
-                  fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 4,
-                  background: isRunning ? "#7c3aed22" : "#1f1f23",
-                  color: isRunning ? "#a78bfa" : "#52525b",
-                  border: `1px solid ${isRunning ? "#7c3aed" : "#27272a"}`,
-                  textDecoration: "none", letterSpacing: "0.04em",
-                  animation: isRunning ? "vg-glow-green 2s ease-in-out infinite" : "none",
-                }}
-              >
-                ▶ LISTEN
-              </a>
-            )}
-            <span style={{
-              fontSize: 10, fontWeight: 500, padding: "2px 7px", borderRadius: 4,
-              background: isPassed ? "#052e16" : isFailed ? "#1a0505" : isRunning ? "#1c1917" : "#1f1f23",
-              color:      isPassed ? "#22c55e" : isFailed ? "#ef4444" : isRunning ? "#f59e0b" : "#52525b",
-            }}>
-              {status}
-            </span>
-          </div>
-        </div>
-
-        {/* Waveforms or placeholder dots */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 7 }}>
-          {(isRunning || isDone) && session ? (
-            <>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 9, color: "#71717a", width: 46, flexShrink: 0, letterSpacing: "0.05em" }}>ATTACKER</span>
-                <Waveform color="#f59e0b" active={isRunning} />
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 9, color: "#71717a", width: 46, flexShrink: 0, letterSpacing: "0.05em" }}>AGENT</span>
-                <Waveform color="#7c3aed" active={isRunning} />
-              </div>
-            </>
-          ) : (
-            <div style={{ display: "flex", gap: 5, justifyContent: "center", paddingTop: 4 }}>
-              {[0, 1, 2].map((i) => (
-                <div key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: "#27272a" }} />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Score bar + duration (when done) */}
-        {isDone && score !== null && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ flex: 1, height: 3, background: "#27272a", borderRadius: 2 }}>
-              <div style={{
-                width: `${score}%`, height: "100%", borderRadius: 2,
-                background: isPassed ? "#22c55e" : "#ef4444",
-                transition: "width 0.6s ease-out",
-              }} />
-            </div>
-            <span style={{ fontSize: 11, color: "#a1a1aa", width: 30, textAlign: "right" }}>{score}%</span>
-            {session?.duration_seconds && (
-              <span style={{ fontSize: 10, color: "#52525b", width: 26 }}>
-                {Math.round(session.duration_seconds)}s
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Transcript hint */}
-        {isDone && hasTx && (
-          <div style={{ fontSize: 10, color: "#52525b", display: "flex", alignItems: "center", gap: 4 }}>
-            <ChevronDown size={10} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
-            {isExpanded ? "Hide transcript" : "View transcript"}
-          </div>
-        )}
-      </div>
-
-      {/* Transcript panel (expanded below card) */}
-      {isExpanded && hasTx && session?.transcript?.turns && (
-        <div style={{
-          background: "#0c0c0d", border: "1px solid #1f1f23", borderTop: "none",
-          borderRadius: "0 0 8px 8px", padding: 12,
-          maxHeight: 240, overflowY: "auto",
-        }}>
-          {/* Dimension scores row */}
-          {session.evaluation?.dimension_scores && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-              <ScorePill label="Consistency" value={session.evaluation.dimension_scores.character_consistency} />
-              <ScorePill label="Jailbreak"   value={session.evaluation.dimension_scores.jailbreak_resistance} />
-              <ScorePill label="Factual"     value={session.evaluation.dimension_scores.factual_accuracy} />
-              <ScorePill label="Degrade"     value={session.evaluation.dimension_scores.graceful_degradation} />
-              {session.evaluation.provider && (
-                <span style={{ fontSize: 10, color: "#52525b", display: "flex", alignItems: "center" }}>
-                  via {session.evaluation.provider}
-                </span>
-              )}
-            </div>
-          )}
-          {/* Chat bubbles */}
-          {session.transcript.turns.map((turn, i) => {
-            const isAtk = turn.role === "caller" || turn.role === "user" || turn.role.toLowerCase() === "attacker";
-            return (
-              <div key={i} style={{
-                display: "flex", flexDirection: "column",
-                alignItems: isAtk ? "flex-start" : "flex-end", marginBottom: 7,
-              }}>
-                <span style={{ fontSize: 9, color: isAtk ? "#f59e0b" : "#71717a", marginBottom: 2, letterSpacing: "0.05em" }}>
-                  {isAtk ? "ATTACKER" : "AGENT"}
-                </span>
-                <div style={{
-                  fontSize: 11, color: "#f4f4f5", lineHeight: 1.45,
-                  background: isAtk ? "#1c1917" : "#18181b",
-                  borderRadius: 6, padding: "5px 9px", maxWidth: "90%",
-                }}>
-                  {turn.text}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VanguardGrid({
-  suite, sessions, expectedTotal, expandedSessions, onToggleSession,
-}: {
-  suite: AttackSuiteItem[];
-  sessions: VanguardSession[];
-  expectedTotal: number;
-  expandedSessions: Set<string>;
-  onToggleSession: (id: string) => void;
-}) {
-  // Build ordered slots: prefer suite order, fall back to live sessions order
-  // Index by both session_id AND attack_definition_id so pre-fetched suite items
-  // (with old session_ids) match live results (which get new session_ids via _fresh_session).
-  const sessionMap = new Map<string, VanguardSession>();
-  sessions.forEach((s) => {
-    sessionMap.set(s.session_id, s);
-    if (s.attack_definition_id) sessionMap.set(s.attack_definition_id, s);
-  });
-
-  type Slot = { personaName: string; session: VanguardSession | null; key: string };
-  let slots: Slot[];
-
-  if (suite.length > 0) {
-    slots = suite.map((item) => ({
-      key: item.session_id,
-      personaName: PERSONA_NAMES[item.attack_persona] || item.attack_persona,
-      session: sessionMap.get(item.session_id) ?? null,
-    }));
-    // Append any sessions not in suite (edge case)
-    sessions.forEach((s) => {
-      if (!slots.find((sl) => sl.key === s.session_id)) {
-        slots.push({ key: s.session_id, personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona, session: s });
-      }
-    });
-  } else {
-    // No suite pre-loaded: show live sessions + placeholder slots
-    const liveSlots: Slot[] = sessions.map((s) => ({
-      key: s.session_id,
-      personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona,
-      session: s,
-    }));
-    const placeholderCount = Math.max(0, expectedTotal - liveSlots.length);
-    const placeholders: Slot[] = Array.from({ length: placeholderCount }, (_, i) => ({
-      key: `placeholder-${i}`,
-      personaName: `Room ${liveSlots.length + i + 1}`,
-      session: null,
-    }));
-    slots = [...liveSlots, ...placeholders];
-  }
-
-  return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "repeat(4, 1fr)",
-      gap: 12,
-      marginBottom: 16,
-    }}>
-      {slots.map((slot, i) => (
-        <VanguardCard
-          key={slot.key}
-          index={i}
-          personaName={slot.personaName}
-          session={slot.session}
-          isExpanded={slot.session ? expandedSessions.has(slot.session.session_id) : false}
-          onToggle={() => slot.session && onToggleSession(slot.session.session_id)}
-        />
-      ))}
     </div>
   );
 }

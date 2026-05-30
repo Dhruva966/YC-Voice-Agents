@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
@@ -110,7 +111,7 @@ def _parse_turns(transcript: dict[str, Any], source_file: str) -> list[ScoredTur
             )
             text = (turn.get("text") or turn.get("content") or "").strip()
             if role == "caller" and text:
-                caller_buf = text
+                caller_buf = (caller_buf + " " + text).strip() if caller_buf else text
             elif role == "agent" and text and caller_buf:
                 paired.append(ScoredTurn(
                     caller=caller_buf,
@@ -135,7 +136,7 @@ def _parse_turns(transcript: dict[str, Any], source_file: str) -> list[ScoredTur
         role = _role_from_label(match.group(1), generic_roles)
         text = match.group(2).strip()
         if role == "caller" and text:
-            caller_buf = text
+            caller_buf = (caller_buf + " " + text).strip() if caller_buf else text
         elif role == "agent" and text and caller_buf:
             paired.append(ScoredTurn(
                 caller=caller_buf,
@@ -167,11 +168,11 @@ def _score_turn(turn: ScoredTurn, client: OpenAI, model: str) -> dict[str, float
             data = json.loads(raw)
         except json.JSONDecodeError:
             LOGGER.warning("score_turn_json_error source=%s turn=%d raw=%r", turn.source_file, turn.turn_index, raw[:200])
-            return {d: 0.0 for d in _DIMENSIONS}
-        return {d: max(0.0, min(10.0, float(data.get(d, 0.0)))) for d in _DIMENSIONS}
+            return {d: 5.0 for d in _DIMENSIONS}
+        return {d: float(data.get(d, 5.0)) for d in _DIMENSIONS}
     except Exception:
         LOGGER.warning("score_turn_failed source=%s turn=%d", turn.source_file, turn.turn_index)
-        return {d: 0.0 for d in _DIMENSIONS}
+        return {d: 5.0 for d in _DIMENSIONS}
 
 
 def _select_top_k(turns: list[ScoredTurn], k: int) -> list[ScoredTurn]:
@@ -199,6 +200,7 @@ def score_transcripts(
     model = _nim_model()
 
     all_turns: list[ScoredTurn] = []
+    pending: list[ScoredTurn] = []
 
     for idx, transcript in enumerate(transcripts):
         source = (
@@ -211,8 +213,14 @@ def score_transcripts(
             LOGGER.warning("no_agent_turns_found source=%s", source)
             continue
 
-        for turn in turns:
-            turn.scores = _score_turn(turn, client, model)
+        pending.extend(turns)
+
+    max_workers = min(16, len(pending)) if pending else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_score_turn, turn, client, model): turn for turn in pending}
+        for future in as_completed(futures):
+            turn = futures[future]
+            turn.scores = future.result()
             all_turns.append(turn)
 
     if not all_turns:

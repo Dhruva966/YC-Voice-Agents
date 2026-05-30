@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+import logging
 
 import httpx
 from openai import OpenAI
 
 from storage import s3_client as _s3_client, bucket_name as _bucket
 from prompts import synthetic_conversation
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_NVIDIA_BASE_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
 
@@ -49,10 +52,6 @@ def _client() -> OpenAI:
 
 def _base_model() -> str:
     return os.getenv("NVIDIA_BASE_MODEL") or DEFAULT_NVIDIA_BASE_MODEL
-
-
-def _max_wait_seconds() -> int:
-    return int(os.getenv("FINETUNE_MAX_WAIT_SECONDS", "3600"))
 
 
 def _parse_labeled_conversation(text: str) -> list[dict[str, str]]:
@@ -95,7 +94,7 @@ def generate_synthetic_conversations(
         except ValueError:
             continue
         if (index + 1) % 50 == 0:
-            print(f"Generated {index + 1}/{n} synthetic conversations")
+            LOGGER.info("synthetic_conversations_generated %d/%d", index + 1, n)
     return examples
 
 
@@ -118,11 +117,6 @@ def submit_finetune(user_id: str, training_examples: list[dict[str, Any]], job_t
     base_url = os.getenv("NVIDIA_CUSTOMIZATION_BASE_URL")
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
-    if presigned_url.startswith("file://") and not re.match(r"^https?://(localhost|127\.0\.0\.1|\\[::1\\])(?::|/|$)", base_url):
-        raise RuntimeError(
-            "Local file:// training URLs cannot be fetched by a remote fine-tune service. "
-            "Set USE_LOCAL_STORAGE=false with S3, or run a local customization service."
-        )
 
     payload = {
         "training_file_url": presigned_url,
@@ -192,16 +186,21 @@ def _completed_model(job_id: str, payload: Any) -> str:
     return base_model
 
 
+_FINETUNE_TIMEOUT_SECONDS = int(
+    os.getenv("FINETUNE_MAX_WAIT_SECONDS")
+    or os.getenv("FINETUNE_POLL_TIMEOUT_SECONDS")
+    or "3600"
+)
+
+
 def wait_for_finetune(job_id: str, poll_interval: int = 60) -> str:
     """Poll for NVIDIA fine-tune completion (blocking). Prefer wait_for_finetune_async in async contexts."""
     base_url = os.getenv("NVIDIA_CUSTOMIZATION_BASE_URL")
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
 
-    deadline = time.monotonic() + _max_wait_seconds()
-    while True:
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"Fine-tune {job_id} did not complete within {_max_wait_seconds()} seconds")
+    deadline = time.monotonic() + _FINETUNE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
         response = httpx.get(
             f"{base_url.rstrip('/')}/customizations/{job_id}",
             headers={"Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}"},
@@ -215,6 +214,7 @@ def wait_for_finetune(job_id: str, poll_interval: int = 60) -> str:
         if status in {"failed", "cancelled", "canceled"}:
             raise RuntimeError(f"Fine-tune {job_id} ended with status {status}: {payload}")
         time.sleep(poll_interval)
+    raise TimeoutError(f"Fine-tune {job_id} did not complete within {_FINETUNE_TIMEOUT_SECONDS}s")
 
 
 async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
@@ -223,11 +223,10 @@ async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
 
-    deadline = time.monotonic() + _max_wait_seconds()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _FINETUNE_TIMEOUT_SECONDS
     async with httpx.AsyncClient(timeout=60) as client:
-        while True:
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"Fine-tune {job_id} did not complete within {_max_wait_seconds()} seconds")
+        while loop.time() < deadline:
             response = await client.get(
                 f"{base_url.rstrip('/')}/customizations/{job_id}",
                 headers={"Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}"},
@@ -240,6 +239,7 @@ async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
             if status in {"failed", "cancelled", "canceled"}:
                 raise RuntimeError(f"Fine-tune {job_id} ended with status {status}: {payload}")
             await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"Fine-tune {job_id} did not complete within {_FINETUNE_TIMEOUT_SECONDS}s")
 
 
 def save_adapter_id(user_id: str, adapter_id: str, s3_client, bucket: str) -> str:

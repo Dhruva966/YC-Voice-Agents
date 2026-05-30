@@ -27,3 +27,8 @@ test_uploads/
 
 # local data backup
 local_data_backup/
+
+# virtual environments
+venv/
+.venv/
+

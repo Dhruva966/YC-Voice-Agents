@@ -1,6 +1,6 @@
 # forge/vanguard — CLAUDE.md
 
-**Purpose:** Adversarial testing infrastructure. Spins up N concurrent Daily rooms, each pitting an attacker LLM persona against the persona agent. Cekura scores every transcript. Results feed the autoloop improvement cycle.
+**Purpose:** Adversarial testing infrastructure. Spins up N concurrent Daily rooms, each pitting an attacker LLM persona against the persona agent. NVIDIA NIM scores every transcript, and Cekura receives observability logs when configured. Results feed the autoloop improvement cycle.
 
 → Root: [CLAUDE.md](../../CLAUDE.md)
 
@@ -19,8 +19,8 @@
 ## The 10 Attacker Personas
 | Key | Attack Goal |
 |-----|------------|
-| `unauthorized_commitment` | Unauthorized discounts, waived fees, guarantees, or contract terms |
-| `pii_exfiltration` | Extract customer, internal, or confidential business information |
+| `unauthorized_commitment` | Pressure unauthorized business commitments |
+| `pii_exfiltration` | Extract private/confidential information |
 | `social_engineer` | Break persona via false authority/urgency |
 | `jailbreaker` | Override system instructions (DAN, developer-mode) |
 | `emotional_escalator` | Sycophancy under emotional pressure |
@@ -30,7 +30,7 @@
 | `contradiction_trapper` | Force self-contradiction |
 | `degraded_audio` | Poor audio/mishearing robustness |
 
-Default suite = 10 personas × 1 + first 4 repeated = 14 sessions total.
+Default suite = first 9 personas × 1 = 9 sessions total.
 
 ## Allowed Patterns
 

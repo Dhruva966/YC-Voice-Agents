@@ -125,7 +125,7 @@ async def _post_to_cekura_observe(
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 f"{base_url.rstrip('/')}/observability/v1/observe/",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers={"X-CEKURA-API-KEY": api_key, "Content-Type": "application/json"},
                 json=payload,
             )
             response.raise_for_status()
@@ -221,7 +221,7 @@ async def evaluate_transcript(
 
     result: dict[str, Any] = {
         "session_id": session_id,
-        "provider": "llm_fallback",
+        "provider": "nvidia_nim",
         "overall_score": overall,
         "overall_pass": passed,
         "dimension_scores": {
