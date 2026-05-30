@@ -17,6 +17,15 @@ from pipeline.attacker_bot import run_attacker_bot
 from prompts import ATTACKER_PERSONAS
 
 
+def _fresh_session(session: dict[str, Any]) -> dict[str, Any]:
+    instance = dict(session)
+    if session.get("session_id"):
+        instance["attack_definition_id"] = session["session_id"]
+    instance["session_id"] = str(uuid.uuid4())
+    instance["status"] = "queued"
+    return instance
+
+
 async def _create_daily_room(session_id: str) -> dict[str, str]:
     api_key = os.getenv("DAILY_API_KEY")
     if not api_key:
@@ -105,9 +114,21 @@ async def run_vanguard(
     semaphore = asyncio.Semaphore(max_concurrent)
     if live_results is not None:
         live_results[run_id] = []
+    run_suite = [_fresh_session(session) for session in attack_suite]
+
+    def publish_live(result: dict[str, Any]) -> None:
+        if live_results is None:
+            return
+        sessions = live_results.setdefault(run_id, [])
+        for index, existing in enumerate(sessions):
+            if existing.get("session_id") == result.get("session_id"):
+                sessions[index] = result
+                return
+        sessions.append(result)
 
     async def guarded(session: dict[str, Any]) -> dict[str, Any]:
         async with semaphore:
+            publish_live({**session, "status": "running"})
             try:
                 result = await _run_one_session(user_id, persona_agent_url, session)
             except Exception as exc:
@@ -122,11 +143,10 @@ async def run_vanguard(
                         "failure_annotations": [{"error": str(exc)}],
                     },
                 }
-            if live_results is not None:
-                live_results[run_id].append(result)
+            publish_live(result)
             return result
 
-    sessions = await asyncio.gather(*(guarded(session) for session in attack_suite))
+    sessions = await asyncio.gather(*(guarded(session) for session in run_suite))
     passed = sum(1 for session in sessions if session.get("status") == "passed")
     total = len(sessions)
     result = {

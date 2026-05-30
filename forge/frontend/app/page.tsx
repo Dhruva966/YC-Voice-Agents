@@ -15,7 +15,7 @@ const inter = Inter({ subsets: ["latin"] });
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 const USER_ID = "demo";
 
-const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Score Transcripts", "Configure Voice", "Build RAG", "Fine-tune"];
+const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Configure Voice", "Score Transcripts", "Build RAG", "Fine-tune"];
 
 const PERSONA_NAMES: Record<string, string> = {
   unauthorized_commitment: "Unauthorized Commitment",
@@ -71,6 +71,7 @@ type VanguardRun = {
 
 type SystemStatus = {
   personality_spec_ready: boolean;
+  voice_runtime_ready?: boolean;
   voice_clone_ready: boolean;
   rag_ready: boolean;
   vanguard_runs: number;
@@ -129,6 +130,7 @@ type LiveResponse = {
   complete: boolean;
   total: number;
   expected_total: number;
+  error?: boolean;
 };
 
 type AttackSuiteItem = {
@@ -179,6 +181,7 @@ export default function Page() {
   const [callInfo, setCallInfo] = useState<{ room_url: string; phone_number: string } | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [run, setRun] = useState<VanguardRun | null>(null);
+  const [hydratedRun, setHydratedRun] = useState<VanguardRun | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>({});
   const [statusInfo, setStatusInfo] = useState<SystemStatus | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -235,17 +238,18 @@ export default function Page() {
     ? "#ef4444"
     : "#52525b";
 
-  const activeRun = run || dashboard.latest_vanguard_run_summary || null;
+  const activeRun = run || hydratedRun || dashboard.latest_vanguard_run_summary || null;
   const total = activeRun?.total || 0;
   const passed = activeRun?.passed || 0;
   const passRate = total ? Math.round((passed / total) * 100) : 0;
   const vanguardRunning = !!runId && (total === 0 || (passed + (activeRun?.failed || 0)) < total);
+  const agentReady = !!statusInfo?.personality_spec_ready && !!statusInfo?.rag_ready;
 
   const isFineTuneReady = !!dashboard.adapter_id;
 
   const statusItems = useMemo(() => [
     { key: "personality_spec_ready", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
-    { key: "voice_clone_ready", label: "Voice Ready", ready: statusInfo?.voice_clone_ready || false },
+    { key: "voice_runtime_ready", label: "Gemini Voice", ready: statusInfo?.voice_runtime_ready ?? statusInfo?.voice_clone_ready ?? false },
     { key: "rag_ready", label: "RAG", ready: statusInfo?.rag_ready || false },
     { key: "finetune", label: "Fine-tune", ready: isFineTuneReady },
     { key: "vanguard", label: "Vanguard", ready: (statusInfo?.vanguard_runs || 0) > 0 },
@@ -268,7 +272,13 @@ export default function Page() {
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/dashboard`);
       if (res.ok) {
-        setDashboard(await res.json());
+        const nextDashboard: Dashboard = await res.json();
+        setDashboard(nextDashboard);
+        const latestRunId = nextDashboard.latest_vanguard_run_summary?.run_id;
+        if (latestRunId) {
+          const runRes = await fetch(`${API_BASE}/users/${USER_ID}/vanguard/runs/${latestRunId}`);
+          if (runRes.ok) setHydratedRun(await runRes.json());
+        }
       }
     } catch {
       // silent fail
@@ -303,8 +313,8 @@ export default function Page() {
         setCompletedSteps((prev) => {
           const next = new Set(prev);
           if (status.stage.includes("personality")) next.add("Extract Personality");
-          if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") next.add("Score Transcripts");
           if (status.stage.includes("voice")) next.add("Configure Voice");
+          if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") next.add("Score Transcripts");
           if (status.stage.includes("rag")) next.add("Build RAG");
           if (status.stage.includes("fine")) next.add("Fine-tune");
           if (status.status === "completed") BUILD_STEPS.forEach((s) => next.add(s));
@@ -358,6 +368,11 @@ export default function Page() {
           setRunId(null);
           refreshDashboard();
           fetchStatus();
+          if (live.error) {
+            setError("Vanguard failed before sessions completed. Check backend logs and API key configuration.");
+            setAutoLoopRunning(false);
+            return;
+          }
           // Auto-loop: if < 80% pass rate and loop is active, improve then rerun
           const ps = live.sessions.filter((s) => s.status === "passed").length;
           const rate = live.sessions.length > 0 ? ps / live.sessions.length : 0;
@@ -463,6 +478,11 @@ export default function Page() {
   async function callAgent() {
     setBusy("call");
     setError(null);
+    if (!agentReady) {
+      setBusy(null);
+      setError("Build must complete before starting the voice agent.");
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/call`, { method: "POST" });
       if (!res.ok) throw new Error("Call agent failed");
@@ -477,6 +497,11 @@ export default function Page() {
   async function launchAttack() {
     setBusy("attack");
     setError(null);
+    if (!agentReady) {
+      setBusy(null);
+      setError("Build must complete before launching Vanguard.");
+      return;
+    }
     try {
       // Pre-fetch attack suite so grid can show named pending cards immediately
       try {
@@ -582,8 +607,8 @@ export default function Page() {
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
     if (stage.includes("personality")) return 2;
-    if (stage.includes("scoring")) return 3;
-    if (stage.includes("voice")) return 4;
+    if (stage.includes("voice")) return 3;
+    if (stage.includes("scoring")) return 4;
     if (stage.includes("rag")) return 5;
     if (stage.includes("fine")) return 6;
     return null;
@@ -910,12 +935,13 @@ export default function Page() {
             <h2 style={{ fontSize: 18, fontWeight: 600, color: "#f4f4f5", margin: 0 }}>Agent</h2>
             <button
               onClick={callAgent}
-              disabled={busy === "call"}
+              disabled={busy === "call" || !agentReady}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
-                background: "#16a34a", color: "#fff", fontSize: 13, fontWeight: 500,
-                padding: "8px 16px", borderRadius: 6, border: "none", cursor: busy === "call" ? "not-allowed" : "pointer",
-                opacity: busy === "call" ? 0.6 : 1,
+                background: agentReady ? "#16a34a" : "#3f3f46", color: "#fff", fontSize: 13, fontWeight: 500,
+                padding: "8px 16px", borderRadius: 6, border: "none",
+                cursor: busy === "call" || !agentReady ? "not-allowed" : "pointer",
+                opacity: busy === "call" || !agentReady ? 0.6 : 1,
               }}
             >
               {busy === "call" ? <Loader2 size={14} className="animate-spin" /> : <Phone size={14} />}
@@ -1050,14 +1076,14 @@ export default function Page() {
               </button>
               <button
                 onClick={launchAttack}
-                disabled={busy === "attack"}
+                disabled={busy === "attack" || !agentReady}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 6,
-                  background: busy === "attack" ? "#5b21b6" : "#7c3aed",
+                  background: busy === "attack" || !agentReady ? "#3f3f46" : "#7c3aed",
                   color: "#fff", fontSize: 13, fontWeight: 500,
                   padding: "8px 16px", borderRadius: 6, border: "none",
-                  cursor: busy === "attack" ? "not-allowed" : "pointer",
-                  opacity: busy === "attack" ? 0.6 : 1,
+                  cursor: busy === "attack" || !agentReady ? "not-allowed" : "pointer",
+                  opacity: busy === "attack" || !agentReady ? 0.6 : 1,
                 }}
               >
                 {busy === "attack" ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}

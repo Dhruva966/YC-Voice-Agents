@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -48,6 +49,10 @@ def _client() -> OpenAI:
 
 def _base_model() -> str:
     return os.getenv("NVIDIA_BASE_MODEL") or DEFAULT_NVIDIA_BASE_MODEL
+
+
+def _max_wait_seconds() -> int:
+    return int(os.getenv("FINETUNE_MAX_WAIT_SECONDS", "3600"))
 
 
 def _parse_labeled_conversation(text: str) -> list[dict[str, str]]:
@@ -113,6 +118,11 @@ def submit_finetune(user_id: str, training_examples: list[dict[str, Any]], job_t
     base_url = os.getenv("NVIDIA_CUSTOMIZATION_BASE_URL")
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
+    if presigned_url.startswith("file://") and not re.match(r"^https?://(localhost|127\.0\.0\.1|\\[::1\\])(?::|/|$)", base_url):
+        raise RuntimeError(
+            "Local file:// training URLs cannot be fetched by a remote fine-tune service. "
+            "Set USE_LOCAL_STORAGE=false with S3, or run a local customization service."
+        )
 
     payload = {
         "training_file_url": presigned_url,
@@ -188,7 +198,10 @@ def wait_for_finetune(job_id: str, poll_interval: int = 60) -> str:
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
 
+    deadline = time.monotonic() + _max_wait_seconds()
     while True:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Fine-tune {job_id} did not complete within {_max_wait_seconds()} seconds")
         response = httpx.get(
             f"{base_url.rstrip('/')}/customizations/{job_id}",
             headers={"Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}"},
@@ -210,8 +223,11 @@ async def wait_for_finetune_async(job_id: str, poll_interval: int = 60) -> str:
     if not base_url:
         raise RuntimeError("NVIDIA_CUSTOMIZATION_BASE_URL is required")
 
+    deadline = time.monotonic() + _max_wait_seconds()
     async with httpx.AsyncClient(timeout=60) as client:
         while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Fine-tune {job_id} did not complete within {_max_wait_seconds()} seconds")
             response = await client.get(
                 f"{base_url.rstrip('/')}/customizations/{job_id}",
                 headers={"Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY')}"},

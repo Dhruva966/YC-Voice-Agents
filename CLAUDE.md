@@ -1,9 +1,11 @@
 # Forge
 
 ## What This Is
-Forge turns bulk sales call transcripts into production-ready voice agents. Companies upload their calls — Forge scores, curates, fine-tunes, and delivers a Twilio webhook URL. Paste it in. Done.
+Forge turns bulk call transcripts into a pre-production safety gate for voice agents. Companies upload redacted calls — Forge scores, curates, builds a RAG-backed Gemini Live agent, red-teams it, and reports readiness before deployment.
 
-The pitch: every other team built a voice agent. Forge builds the infrastructure that makes voice agents production-ready, continuously improving, and verifiably robust before they ship.
+The pitch: every other team built a voice agent. Forge builds the infrastructure that makes voice agents measurable, adversarially tested, and harder to ship on vibes.
+
+Current boundary: the live runtime is Gemini Live with prompts/RAG. NVIDIA LoRA fine-tune jobs can be prepared/submitted and an adapter ID can be saved, but Gemini Live does not load that adapter today.
 
 ## Tech Stack
 | Layer | Technology |
@@ -11,8 +13,8 @@ The pitch: every other team built a voice agent. Forge builds the infrastructure
 | Voice pipeline | Pipecat + Gemini 3.1 Flash Live (STT + LLM + TTS, audio-to-audio) |
 | Telephony | Twilio (WebSocket media stream) |
 | Transport | Daily (WebRTC for Daily room calls + Vanguard sessions) |
-| Fine-tuning | NVIDIA NIM LoRA Customization API |
-| RAG embeddings | NVIDIA NIM (`nvidia/llama-3.2-nv-embedqa-1b-v2`) |
+| Fine-tuning | NVIDIA NIM LoRA Customization API path; adapter saved/displayed, not loaded by Gemini Live runtime |
+| RAG embeddings | NVIDIA NIM (`nvidia/llama-nemotron-embed-1b-v2`) |
 | Transcript scoring | NVIDIA NIM (`meta/llama-4-maverick-17b-128e-instruct`) |
 | Evaluation | Cekura (LLM fallback: NVIDIA NIM) |
 | Vector DB | ChromaDB (local) / pgvector (prod) |
@@ -56,7 +58,7 @@ forge/
 │   └── app/page.tsx         ← Dashboard: Build / Agent / Vanguard / Improvement
 ├── storage.py               ← S3 shim: USE_LOCAL_STORAGE=true → ./local_data/
 └── prompts.py               ← ALL prompts: persona_system, transcript_quality_score,
-                                ATTACKER_PERSONAS (8), eval rubrics, finetune formatters
+                                ATTACKER_PERSONAS (10), eval rubrics, finetune formatters
 ```
 
 ## Agent Capability Routing
@@ -75,7 +77,7 @@ Escalate only when the current tier shows a clear reasoning gap, the blast radiu
 |------|-------|
 | FastAPI app | `forge/api/main.py:app` |
 | Pipecat voice pipeline (Daily) | `forge/pipeline/persona_bot.py:run_persona_bot()` |
-| Twilio inbound webhook | `forge/api/main.py:POST /webhook/twilio/inbound` |
+| Twilio inbound webhook | `forge/api/main.py:POST /users/{user_id}/webhook/twilio/inbound` (`/webhook/twilio/inbound` remains demo-only) |
 | Twilio media stream (Gemini Live) | `forge/api/main.py:WS /media-stream` |
 | Daily room call | `forge/api/main.py:POST /users/{user_id}/call` |
 | Build pipeline | `forge/api/main.py:POST /users/{user_id}/build` -> `_run_build()` |
@@ -112,11 +114,11 @@ Keys: `turns[]`, `top_k_turns[]` (selected), `aggregate_score`, `dimension_score
 Keys: `run_id`, `total`, `passed`, `failed`, `pass_rate`, `duration_seconds`, `sessions[]`
 
 **Attack suite:** `./local_data/{user_id}/attack_suite.json`
-Array of `{session_id, attack_persona, status}` — grows after each improvement cycle.
+Array of attack definitions. Stored `session_id` values are definition IDs only; `run_vanguard()` creates fresh per-run session IDs.
 
 ## Security Non-Negotiables
 1. No API keys in code — env vars only; every key documented in `.env.example`
-2. `user_id` path param is untrusted — `storage.py` enforces `lstrip("/")` to block path traversal
+2. `user_id` path param is untrusted — API routes validate a restricted ID format and `storage.py` blocks path traversal
 3. Twilio webhook must validate `X-Twilio-Signature` before production traffic
 4. Transcript data is PII — `local_data/` is gitignored; never commit audio or transcript content
 5. No unguarded endpoints — all `/users/{user_id}/*` routes must validate user context before prod
@@ -194,7 +196,8 @@ Treat this as a workflow map. Use slash commands only in tools that support them
 | `NVIDIA_API_KEY` | ✅ | Fine-tuning, RAG embeddings, transcript scoring |
 | `NVIDIA_BASE_URL` | ✅ | `https://integrate.api.nvidia.com/v1` |
 | `NVIDIA_BASE_MODEL` | ✅ | `meta/llama-4-maverick-17b-128e-instruct` |
-| `NVIDIA_EMBEDDING_MODEL` | ✅ | `nvidia/llama-3.2-nv-embedqa-1b-v2` |
+| `NVIDIA_EMBEDDING_MODEL` | ✅ | `nvidia/llama-nemotron-embed-1b-v2` |
+| `NVIDIA_EMBEDDING_DIMENSIONS` | optional | Embedding vector size requested from NVIDIA (default: `1024`) |
 | `DAILY_API_KEY` | ✅ | Daily room creation (Vanguard + browser calls) |
 | `TWILIO_ACCOUNT_SID` | ✅ | Twilio telephony |
 | `TWILIO_AUTH_TOKEN` | ✅ | Twilio auth |
@@ -205,12 +208,13 @@ Treat this as a workflow map. Use slash commands only in tools that support them
 | `USE_LOCAL_STORAGE` | optional | `true` (default) → `./local_data/`; `false` → AWS S3 |
 | `USE_LOCAL_RAG` | optional | `true` (default) → ChromaDB; `false` → pgvector/RDS |
 | `TRANSCRIPT_SCORE_TOP_K` | optional | Top segments per scoring dimension (default: `50`) |
+| `FINETUNE_MAX_WAIT_SECONDS` | optional | Max customization polling time before fallback (default: `3600`) |
 | `AWS_S3_BUCKET` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `AWS_SECRET_ACCESS_KEY` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `AWS_REGION` | optional | Required when `USE_LOCAL_STORAGE=false` |
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | optional | LoRA fine-tune job submission endpoint |
-| `NVIDIA_PERSONA_MODEL` | optional | Adapter ID after fine-tune completes |
+| `NVIDIA_PERSONA_MODEL` | optional | Adapter ID after fine-tune completes; Gemini Live does not load it |
 | `PERSONA_AGENT_URL` | optional | `http://localhost:8000` local / `http://backend:8000` docker |
 | `HUGGINGFACE_TOKEN` | optional | Better pyannote diarization (fallback works without it) |
 

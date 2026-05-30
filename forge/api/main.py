@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_CYCLE_RUN_RE = re.compile(r"^cycle_[A-Za-z0-9_-]{1,80}$")
 
 import openai
 import httpx
@@ -64,7 +65,7 @@ from ingestion.transcript_scorer import score_transcripts
 from personality.extractor import extract_personality, load_personality_spec, save_personality_spec
 from pipeline.persona_bot import run_persona_bot
 from prompts import persona_system
-from rag.retriever import build_knowledge_base, init_db
+from rag.retriever import build_knowledge_base, has_knowledge_base, init_db
 from vanguard.orchestrator import load_attack_suite, run_vanguard
 from voice.clone import create_voice_clone
 
@@ -72,6 +73,7 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_NVIDIA_BASE_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
 _vanguard_live: dict[str, list[dict[str, Any]]] = {}
 _vanguard_live_totals: dict[str, int] = {}
+_USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 @asynccontextmanager
@@ -126,13 +128,30 @@ def _base_model() -> str:
     return os.getenv("NVIDIA_BASE_MODEL") or DEFAULT_NVIDIA_BASE_MODEL
 
 
-def _twilio_stream_url(request: Request) -> str:
+def _validate_user_id(user_id: str) -> str:
+    if not _USER_ID_RE.fullmatch(user_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid user_id")
+    return user_id
+
+
+def _require_built_user(user_id: str) -> None:
+    try:
+        _s3_client().head_object(Bucket=_bucket(), Key=f"{user_id}/personality/personality_spec.json")
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "NoSuchKey":
+            raise HTTPException(status_code=400, detail="Build pipeline must complete before starting agent workflows.") from exc
+        raise
+
+
+def _twilio_stream_url(request: Request, user_id: str) -> str:
     configured = os.getenv("TWILIO_STREAM_URL") or os.getenv("WSS_BASE_URL")
     if configured:
-        return configured.rstrip("/")
+        base = configured.rstrip("/")
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}user_id={user_id}"
 
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    return f"wss://{host}/media-stream"
+    return f"wss://{host}/media-stream?user_id={user_id}"
 
 
 def _put_status(user_id: str, job_id: str, payload: dict[str, Any]) -> None:
@@ -162,6 +181,34 @@ def _list_keys(prefix: str) -> list[str]:
     for page in paginator.paginate(Bucket=_bucket(), Prefix=prefix):
         keys.extend(item["Key"] for item in page.get("Contents", []))
     return keys
+
+
+def _key_exists(key: str) -> bool:
+    try:
+        _s3_client().head_object(Bucket=_bucket(), Key=key)
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "NoSuchKey":
+            return False
+        raise
+
+
+def _transcript_to_text(transcript: dict[str, Any], index: int) -> str:
+    source = transcript.get("source_file") or f"transcript_{index}"
+    turns = transcript.get("turns") or transcript.get("segments")
+    if isinstance(turns, list):
+        lines = [f"SOURCE: {source}"]
+        for turn in turns:
+            if not isinstance(turn, dict):
+                continue
+            role = turn.get("role") or turn.get("speaker") or turn.get("speaker_label") or "speaker"
+            text = turn.get("text") or turn.get("content") or ""
+            if text:
+                lines.append(f"{str(role).upper()}: {text}")
+        return "\n".join(lines)
+    if isinstance(transcript.get("text"), str):
+        return f"SOURCE: {source}\n{transcript['text']}"
+    return f"SOURCE: {source}\n{json.dumps(transcript, ensure_ascii=True)}"
 
 
 def _timestamp_value(value: Any) -> float:
@@ -209,6 +256,7 @@ _MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 
 @app.post("/users/{user_id}/ingest")
 async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    user_id = _validate_user_id(user_id)
     suffix = Path(file.filename or "upload.bin").suffix.lower()
     if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(status_code=400, detail=f"File type {suffix!r} not allowed")
@@ -230,6 +278,7 @@ async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
 
 
 def _run_build(user_id: str, job_id: str) -> None:
+    user_id = _validate_user_id(user_id)
     s3 = _s3_client()
     bucket = _bucket()
     try:
@@ -265,7 +314,8 @@ def _run_build(user_id: str, job_id: str) -> None:
             training_transcripts = transcripts
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "building_rag", "status": "running"})
-        kb_texts = get_user_knowledge_base_texts(user_id) + corpus_texts
+        transcript_rag_texts = [_transcript_to_text(item, idx) for idx, item in enumerate(transcripts)]
+        kb_texts = get_user_knowledge_base_texts(user_id) + corpus_texts + transcript_rag_texts
         build_knowledge_base(user_id, kb_texts, "build_pipeline")
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "fine_tuning", "status": "running"})
@@ -302,6 +352,7 @@ def _run_build(user_id: str, job_id: str) -> None:
 
 @app.post("/users/{user_id}/build", response_model=QueuedResponse)
 async def build(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
+    user_id = _validate_user_id(user_id)
     job_id = str(uuid.uuid4())
     _put_status(user_id, job_id, {"job_id": job_id, "stage": "queued", "status": "queued"})
     background_tasks.add_task(_run_build, user_id, job_id)
@@ -310,6 +361,7 @@ async def build(user_id: str, background_tasks: BackgroundTasks) -> QueuedRespon
 
 @app.get("/users/{user_id}/build/status")
 async def build_status(user_id: str) -> dict[str, Any]:
+    user_id = _validate_user_id(user_id)
     try:
         return _get_json_key(f"{user_id}/build_status/latest.json")
     except ClientError as exc:
@@ -320,9 +372,11 @@ async def build_status(user_id: str) -> dict[str, Any]:
 
 @app.post("/join_room")
 async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    user_id = _validate_user_id(request.user_id)
+    _require_built_user(user_id)
     background_tasks.add_task(
         run_persona_bot,
-        request.user_id,
+        user_id,
         request.user_name,
         request.room_url,
         request.daily_token,
@@ -332,13 +386,14 @@ async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks)
 
 @app.post("/users/{user_id}/call", response_model=CallResponse)
 async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallResponse:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
     daily = await _create_daily_room()
     background_tasks.add_task(run_persona_bot, user_id, user_id, daily["room_url"], daily["token"])
     return CallResponse(room_url=daily["room_url"], phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""))
 
 
-@app.post("/webhook/twilio/inbound")
-async def twilio_inbound(request: Request) -> Response:
+async def _twilio_inbound_response(request: Request, user_id: str) -> Response:
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     if auth_token:
         validator = _TwilioRequestValidator(auth_token)
@@ -350,13 +405,30 @@ async def twilio_inbound(request: Request) -> Response:
             raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     twiml = VoiceResponse()
     connect = twiml.connect()
-    connect.stream(url=_twilio_stream_url(request))
+    connect.stream(url=_twilio_stream_url(request, user_id))
     return Response(content=str(twiml), media_type="application/xml")
+
+
+@app.post("/webhook/twilio/inbound")
+async def twilio_inbound(request: Request) -> Response:
+    return await _twilio_inbound_response(request, "demo")
+
+
+@app.post("/users/{user_id}/webhook/twilio/inbound")
+async def twilio_inbound_for_user(user_id: str, request: Request) -> Response:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
+    return await _twilio_inbound_response(request, user_id)
 
 
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
     await websocket.accept()
+    try:
+        user_id = _validate_user_id(websocket.query_params.get("user_id", "demo"))
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
         data = json.loads(raw)
@@ -381,8 +453,8 @@ async def media_stream(websocket: WebSocket):
             ),
         )
 
-        spec = load_personality_spec("demo", _s3_client(), _bucket())
-        initial_system_prompt = persona_system("demo", spec, [])
+        spec = load_personality_spec(user_id, _s3_client(), _bucket())
+        initial_system_prompt = persona_system(user_id, spec, [])
 
         llm = GeminiLiveLLMService(
             api_key=os.getenv("GEMINI_API_KEY"),
@@ -418,8 +490,8 @@ async def media_stream(websocket: WebSocket):
                 history = messages[:latest_idx] if latest_idx is not None else messages
                 try:
                     query = await asyncio.to_thread(rewrite_rag_query, history, utterance)
-                    chunks = await asyncio.to_thread(retrieve, "demo", query, 5)
-                    prompt = persona_system("demo", self._personality_spec, chunks)
+                    chunks = await asyncio.to_thread(retrieve, user_id, query, 5)
+                    prompt = persona_system(user_id, self._personality_spec, chunks)
                 except Exception:
                     prompt = initial_system_prompt
                 await self.push_frame(
@@ -478,12 +550,15 @@ def _run_vanguard_background(user_id: str, run_id: str) -> None:
 
 @app.post("/users/{user_id}/vanguard/run", response_model=QueuedResponse)
 async def vanguard_run(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
     run_id = str(uuid.uuid4())
     background_tasks.add_task(_run_vanguard_background, user_id, run_id)
     return QueuedResponse(run_id=run_id, status="queued")
 
 
 def _vanguard_runs_sync(user_id: str) -> list[dict[str, Any]]:
+    user_id = _validate_user_id(user_id)
     runs = []
     for key in _list_keys(f"{user_id}/vanguard_runs/"):
         if key.endswith(".json"):
@@ -507,18 +582,21 @@ def _vanguard_runs_sync(user_id: str) -> list[dict[str, Any]]:
 
 @app.get("/users/{user_id}/vanguard/runs")
 async def vanguard_runs(user_id: str) -> list[dict[str, Any]]:
+    user_id = _validate_user_id(user_id)
     return await asyncio.to_thread(_vanguard_runs_sync, user_id)
 
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}")
 async def vanguard_run_result(user_id: str, run_id: str) -> dict[str, Any]:
-    if not _UUID_RE.match(run_id) and not run_id.startswith("cycle_"):
+    user_id = _validate_user_id(user_id)
+    if not _UUID_RE.match(run_id) and not _CYCLE_RUN_RE.match(run_id):
         raise HTTPException(status_code=400, detail="Invalid run_id format")
     return _get_json_key(f"{user_id}/vanguard_runs/{run_id}.json")
 
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}/live")
 async def vanguard_run_live(user_id: str, run_id: str) -> dict[str, Any]:  # noqa: ARG001
+    _validate_user_id(user_id)
     sessions = list(_vanguard_live.get(run_id, []))
     expected = _vanguard_live_totals.get(run_id)
     error = expected == -2
@@ -534,11 +612,13 @@ async def vanguard_run_live(user_id: str, run_id: str) -> dict[str, Any]:  # noq
 
 @app.get("/users/{user_id}/attack_suite")
 async def get_attack_suite(user_id: str) -> list[dict[str, Any]]:
+    user_id = _validate_user_id(user_id)
     return await asyncio.to_thread(load_attack_suite, user_id)
 
 
 @app.post("/users/{user_id}/vanguard/improve", response_model=QueuedResponse)
 async def vanguard_improve(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
+    user_id = _validate_user_id(user_id)
     runs = await vanguard_runs(user_id)
     if not runs:
         raise HTTPException(status_code=400, detail="No Vanguard runs found")
@@ -561,6 +641,7 @@ async def vanguard_improve(user_id: str, background_tasks: BackgroundTasks) -> Q
 
 def _aggregate_pass_rate_by_persona(user_id: str) -> dict[str, dict[str, Any]]:
     """Aggregate pass/fail counts per attack_persona across all vanguard runs."""
+    user_id = _validate_user_id(user_id)
     persona_stats: dict[str, dict[str, int]] = {}
     for key in _list_keys(f"{user_id}/vanguard_runs/"):
         if not key.endswith(".json"):
@@ -588,6 +669,7 @@ def _aggregate_pass_rate_by_persona(user_id: str) -> dict[str, dict[str, Any]]:
 
 @app.get("/users/{user_id}/dashboard")
 async def dashboard(user_id: str) -> dict[str, Any]:
+    user_id = _validate_user_id(user_id)
     s3 = _s3_client()
     bucket = _bucket()
     try:
@@ -639,60 +721,27 @@ async def dashboard(user_id: str) -> dict[str, Any]:
 @app.get("/users/{user_id}/status")
 async def get_user_status(user_id: str):
     """Returns real-time readiness status for a user."""
-    from pathlib import Path
+    user_id = _validate_user_id(user_id)
+    personality_spec_ready = _key_exists(f"{user_id}/personality/personality_spec.json")
+    voice_runtime_ready = bool(os.getenv("GEMINI_API_KEY"))
 
-    safe_id = user_id.lstrip("/")
-    if ".." in safe_id or safe_id.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid user_id")
-    local_data = (Path("local_data") / safe_id).resolve()
-    if not str(local_data).startswith(str(Path("local_data").resolve())):
-        raise HTTPException(status_code=400, detail="Invalid user_id")
-
-    # personality_spec_ready
-    spec_path = local_data / "personality" / "personality_spec.json"
-    personality_spec_ready = spec_path.exists()
-
-    # Gemini Live is the runtime voice path; ElevenLabs voice_id.txt is legacy/optional.
-    voice_path = local_data / "voice_id.txt"
-    voice_clone_ready = voice_path.exists() or bool(os.getenv("GEMINI_API_KEY"))
-
-    # rag_ready - check ChromaDB collection
     rag_ready = False
     try:
-        import chromadb
-        chroma_path = os.getenv("LOCAL_CHROMA_DIR", "./local_data/chroma")
-        client = chromadb.PersistentClient(path=chroma_path)
-        collection_names = [c.name for c in client.list_collections()]
-        rag_ready = f"user_{user_id}" in collection_names
+        rag_ready = await asyncio.to_thread(has_knowledge_base, user_id)
     except Exception:
         pass
 
-    # vanguard_runs - count files in local_data/{user_id}/vanguard_runs/
-    vanguard_dir = local_data / "vanguard_runs"
-    vanguard_runs = 0
-    if vanguard_dir.exists():
-        vanguard_runs = len(list(vanguard_dir.glob("*.json")))
-
-    # improvement_cycles - count files
-    cycles_dir = local_data / "improvement_cycles"
-    improvement_cycles = 0
-    if cycles_dir.exists():
-        improvement_cycles = len(list(cycles_dir.glob("*.json")))
-
-    # attack_suite_size - read attack_suite.json
-    attack_suite_size = 0
-    suite_path = local_data / "attack_suite.json"
-    if suite_path.exists():
-        try:
-            import json as _json
-            suite = _json.loads(suite_path.read_text())
-            attack_suite_size = len(suite)
-        except Exception:
-            pass
+    vanguard_runs = len([key for key in _list_keys(f"{user_id}/vanguard_runs/") if key.endswith(".json")])
+    improvement_cycles = len([key for key in _list_keys(f"{user_id}/improvement_cycles/") if key.endswith(".json")])
+    try:
+        attack_suite_size = len(_get_json_key(f"{user_id}/attack_suite.json")) if _key_exists(f"{user_id}/attack_suite.json") else 0
+    except Exception:
+        attack_suite_size = 0
 
     return {
         "personality_spec_ready": personality_spec_ready,
-        "voice_clone_ready": voice_clone_ready,
+        "voice_runtime_ready": voice_runtime_ready,
+        "voice_clone_ready": voice_runtime_ready,
         "rag_ready": rag_ready,
         "vanguard_runs": vanguard_runs,
         "improvement_cycles": improvement_cycles,
@@ -707,6 +756,7 @@ class ChatRequest(BaseModel):
 
 @app.get("/users/{user_id}/transcript_scores")
 async def transcript_scores(user_id: str) -> dict[str, Any]:
+    user_id = _validate_user_id(user_id)
     try:
         return _get_json_key(f"{user_id}/transcript_scores/overall.json")
     except Exception:
@@ -715,8 +765,9 @@ async def transcript_scores(user_id: str) -> dict[str, Any]:
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    user_id = _validate_user_id(req.user_id)
     start = time.time()
-    system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, req.user_id, req.user_id, [], req.message)
+    system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, user_id, user_id, [], req.message)
     client = openai.AsyncOpenAI(
         api_key=os.getenv("NVIDIA_API_KEY"),
         base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
