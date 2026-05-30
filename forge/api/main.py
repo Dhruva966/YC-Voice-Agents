@@ -92,7 +92,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Forge", version="0.1.0", lifespan=lifespan)
-_allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",") if o.strip()]
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:3001,http://localhost:3100,http://localhost:3101",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
@@ -225,6 +232,27 @@ async def ingest(user_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
         path.unlink(missing_ok=True)
 
 
+def _spawn_persona_bot(
+    user_id: str,
+    user_name: str,
+    room_url: str,
+    daily_token: str,
+) -> None:
+    import threading
+
+    def _runner() -> None:
+        try:
+            run_persona_bot(user_id, user_name, room_url, daily_token)
+        except Exception:
+            LOGGER.exception("persona_bot_launch_failed user_id=%s room_url=%s", user_id, room_url)
+
+    threading.Thread(
+        target=_runner,
+        name=f"persona-bot-{user_id}",
+        daemon=True,
+    ).start()
+
+
 def _run_build(user_id: str, job_id: str) -> None:
     s3 = _s3_client()
     bucket = _bucket()
@@ -265,10 +293,14 @@ def _run_build(user_id: str, job_id: str) -> None:
         build_knowledge_base(user_id, kb_texts, "build_pipeline")
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "fine_tuning", "status": "running"})
-        examples = generate_synthetic_conversations(spec, training_transcripts, n=20)
         fine_tune_job_id = None
         fine_tune_error = None
+        examples_count = 0
         try:
+            examples = generate_synthetic_conversations(spec, training_transcripts, n=20)
+            examples_count = len(examples)
+            if not examples:
+                raise RuntimeError("No synthetic training examples were generated from the uploaded transcripts.")
             fine_tune_job_id = submit_finetune(user_id, examples, "initial")
         except Exception as exc:
             LOGGER.exception("initial_fine_tune_failed_using_base_model")
@@ -281,6 +313,7 @@ def _run_build(user_id: str, job_id: str) -> None:
                 "stage": "submitted",
                 "status": "completed",
                 "fine_tune_job_id": fine_tune_job_id,
+                "synthetic_examples_generated": examples_count,
                 "fallback_model_id": _base_model() if fine_tune_error else None,
                 "fine_tune_error": fine_tune_error,
             },
@@ -310,13 +343,7 @@ async def build_status(user_id: str) -> dict[str, Any]:
 
 @app.post("/join_room")
 async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
-    background_tasks.add_task(
-        run_persona_bot,
-        request.user_id,
-        request.user_name,
-        request.room_url,
-        request.daily_token,
-    )
+    _spawn_persona_bot(request.user_id, request.user_name, request.room_url, request.daily_token)
     return {"status": "joining"}
 
 
@@ -324,7 +351,7 @@ async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks)
 async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallResponse:
     _validate_user_id(user_id)
     daily = await _create_daily_room()
-    background_tasks.add_task(run_persona_bot, user_id, user_id, daily["room_url"], daily["token"])
+    _spawn_persona_bot(user_id, user_id, daily["room_url"], daily["token"])
     return CallResponse(room_url=daily["room_url"], phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""))
 
 

@@ -107,10 +107,10 @@ type VanguardRun = {
   pass_rate: number; sessions?: VanguardSession[];
 };
 type SystemStatus = {
-  personality_spec_ready: boolean; voice_clone_ready: boolean; rag_ready: boolean;
+  personality_spec_ready: boolean; instant_spec_ready?: boolean; voice_clone_ready: boolean; rag_ready: boolean;
   vanguard_runs: number; improvement_cycles: number; attack_suite_size: number;
 };
-type PassRateHistoryItem = { cycle: number; pass_rate: number; regression_passed?: boolean };
+type PassRateHistoryItem = { cycle: number; pass_rate: number; pass_rate_before?: number; regression_passed?: boolean };
 type Dashboard = {
   latest_vanguard_run_summary?: VanguardRun | null;
   pass_rate_history?:           PassRateHistoryItem[];
@@ -149,6 +149,14 @@ type AttackSuiteItem = { session_id: string; attack_persona: string; status: str
 /* ─────────── Utils ──────────────────────────────────────── */
 function formatTime(ts: Date): string {
   return ts.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  const payload = await res.json().catch(() => null) as Record<string, unknown> | null;
+  if (typeof payload?.detail === "string") return payload.detail;
+  if (typeof payload?.error === "string") return payload.error;
+  if (typeof payload?.message === "string") return payload.message;
+  return fallback;
 }
 
 /* ─────────── Primitive button components ────────────────── */
@@ -830,6 +838,8 @@ export default function Page() {
   const [userId,              setUserId]              = useState("demo");
   const [activeSection,       setActiveSection]       = useState("build");
   const [files,               setFiles]               = useState<File[]>([]);
+  const [ingestMode,          setIngestMode]          = useState<"files" | "text">("files");
+  const [rawTranscriptText,   setRawTranscriptText]   = useState("");
   const [isDragging,          setIsDragging]          = useState(false);
   const [completedSteps,      setCompletedSteps]      = useState<string[]>([]);
   const [buildJobId,          setBuildJobId]          = useState<string | null>(null);
@@ -920,6 +930,7 @@ export default function Page() {
   const buildComplete   = buildStage === "submitted" || completedSteps.length >= BUILD_STEPS.length || !!dashboard.personality_spec;
   const personalitySpec = dashboard.personality_spec as Record<string, unknown> | null | undefined;
   const sessions        = activeRun?.sessions || [];
+  const hasBuildInput   = ingestMode === "files" ? files.length > 0 : rawTranscriptText.trim().length > 0;
 
   const featuredSession = useMemo(() => {
     if (sessions.length === 0) return null;
@@ -931,6 +942,23 @@ export default function Page() {
     }
     return sessions[sessions.length - 1];
   }, [sessions]);
+
+  const buildStepCards = useMemo(() => {
+    const cards = [
+      { key: "Ingest", label: "Ingest", match: ["ingest"] },
+      { key: "Transcribe", label: "Transcribe", match: ["transcrib"] },
+      { key: "Extract Personality", label: "Extract", match: ["personality"] },
+      { key: "Score Transcripts", label: "Score", match: ["scoring"] },
+      { key: "Configure Voice", label: "Configure", match: ["voice", "cloning_voice"] },
+      { key: "Build RAG", label: "RAG", match: ["rag"] },
+      { key: "Fine-tune", label: "Fine-tune", match: ["fine"] },
+    ];
+    return cards.map((card, index) => {
+      const done = completedSteps.includes(card.key) || (buildComplete && index <= BUILD_STEPS.indexOf(card.key));
+      const active = !done && !!buildStage && card.match.some((token) => buildStage.includes(token));
+      return { ...card, done, active };
+    });
+  }, [buildComplete, buildStage, completedSteps]);
 
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
@@ -956,6 +984,22 @@ export default function Page() {
       if (!userId) return;
       const res = await fetch(`${API_BASE}/users/${userId}/dashboard`);
       if (res.ok) setDashboard(await res.json());
+    } catch { /* silent */ }
+  }
+  async function fetchBuildStatus() {
+    try {
+      if (!userId) return;
+      const res = await fetch(`${API_BASE}/users/${userId}/build/status`);
+      if (!res.ok) return;
+      const status: BuildStatus = await res.json();
+      if (!status?.job_id) return;
+      setBuildJobId(status.job_id);
+      setBuildStage(status.stage || null);
+      if (status.status === "completed") {
+        setCompletedSteps(BUILD_STEPS);
+      } else if (status.status === "failed" && status.error) {
+        setError(status.error);
+      }
     } catch { /* silent */ }
   }
   async function fetchTranscriptScores() {
@@ -998,25 +1042,46 @@ export default function Page() {
     if (!userId) return;
     setBusy("build"); setCompletedSteps([]); setError(null);
     try {
-      for (const file of files) {
+      const uploads = ingestMode === "text"
+        ? [new File([rawTranscriptText], "pasted_transcript.txt", { type: "text/plain" })]
+        : files;
+      for (const file of uploads) {
         const body = new FormData();
         body.append("file", file);
         const res = await fetch(`${API_BASE}/users/${userId}/ingest`, { method: "POST", body });
-        if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
+        if (!res.ok) throw new Error(await readErrorMessage(res, `Upload failed for ${file.name}`));
       }
       setCompletedSteps(["Ingest", "Transcribe"]);
       const res = await fetch(`${API_BASE}/users/${userId}/build`, { method: "POST" });
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Build could not be started."));
       setBuildJobId((await res.json()).job_id);
+      setFiles([]);
+      if (ingestMode === "text") setRawTranscriptText("");
     } catch (e) { setError(String(e)); } finally { setBusy(null); }
   }
   async function callAgent() {
     if (!userId) return;
     setBusy("call"); setError(null);
+    if (!agentReady) {
+      setBusy(null);
+      setError("Build must complete before starting the live demo call.");
+      return;
+    }
+    const roomWindow = window.open("", "_blank", "noopener,noreferrer");
     try {
       const res = await fetch(`${API_BASE}/users/${userId}/call`, { method: "POST" });
-      if (!res.ok) throw new Error("Call agent failed");
-      setCallInfo(await res.json());
-    } catch (e) { setError(String(e)); } finally { setBusy(null); }
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Call agent failed"));
+      const payload = await res.json();
+      setCallInfo(payload);
+      if (roomWindow && payload.room_url) {
+        roomWindow.location.href = payload.room_url;
+      } else if (payload.room_url) {
+        window.open(payload.room_url, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      roomWindow?.close();
+      setError(String(e));
+    } finally { setBusy(null); }
   }
   async function launchAttack() {
     if (!userId) return;
@@ -1027,7 +1092,7 @@ export default function Page() {
         if (sr.ok) setAttackSuite(await sr.json());
       } catch { /* best-effort */ }
       const res = await fetch(`${API_BASE}/users/${userId}/vanguard/run`, { method: "POST" });
-      if (!res.ok) throw new Error("Launch attack failed");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Launch attack failed"));
       const payload = await res.json();
       setRunId(payload.run_id);
       setRun({ run_id: payload.run_id, total: 0, passed: 0, failed: 0, pass_rate: 0, sessions: [] });
@@ -1053,8 +1118,7 @@ export default function Page() {
     try {
       const res = await fetch(`${API_BASE}/users/${userId}/vanguard/improve`, { method: "POST" });
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error((d as Record<string, string>).detail || "Improvement cycle failed");
+        throw new Error(await readErrorMessage(res, "Improvement cycle failed"));
       }
       improveStartCount.current = chartData.length;
       setImprovementRunning(true);
@@ -1071,7 +1135,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: chatMessage, user_id: userId }),
       });
-      if (!res.ok) throw new Error("Chat request failed");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Chat request failed"));
       const data = await res.json();
       setChatResponse(data.response); setChatLatency(data.latency_ms);
     } catch (e) { setError(String(e)); } finally { setChatLoading(false); }
@@ -1104,7 +1168,7 @@ export default function Page() {
     setTranscriptScores(null);
     setAttackSuite([]);
 
-    fetchStatus(); refreshDashboard(); fetchTranscriptScores();
+    fetchStatus(); refreshDashboard(); fetchTranscriptScores(); fetchBuildStatus();
     const st = setInterval(fetchStatus, 30000);
     const dt = setInterval(refreshDashboard, 15000);
     return () => { clearInterval(st); clearInterval(dt); };
@@ -1126,6 +1190,7 @@ export default function Page() {
         if (status.status === "completed")  BUILD_STEPS.forEach((s) => nxt.add(s));
         setCompletedSteps(Array.from(nxt));
         setBuildStage(status.stage);
+        if (status.status === "failed" && status.error) setError(status.error);
         if (status.status === "completed" || status.status === "failed") {
           window.clearInterval(timer); refreshDashboard(); fetchStatus();
           if (status.status === "completed") fetchTranscriptScores();
@@ -1249,6 +1314,8 @@ export default function Page() {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
         }
+
+        .spin-inline { animation: spin 0.95s linear infinite; }
 
         .forge-btn-primary { display:inline-flex; align-items:center; gap:6px; background:var(--clay); color:#fff; font-size:13px; font-weight:600; padding:8px 16px; border-radius:var(--radius-sm); border:none; cursor:pointer; transition:background 0.15s; }
         .forge-btn-primary:hover { background:var(--clay-deep); }
@@ -1407,106 +1474,134 @@ export default function Page() {
             </div>
             <button
               onClick={uploadAndBuild}
-              disabled={!files.length || busy === "build"}
+              disabled={!hasBuildInput || busy === "build"}
               className="forge-btn-primary"
             >
-              {busy === "build" ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+              {busy === "build" ? <Loader2 size={13} className="spin-inline" /> : <Zap size={13} />}
               Start Build
             </button>
           </div>
 
-          {/* Drop zone */}
-          <div
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setIsDragging(false); setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files || [])]); }}
-            style={{
-              border: `2px dashed ${isDragging ? "var(--clay)" : "var(--border)"}`,
-              background: isDragging ? "var(--clay-tint)" : "var(--surface-2)",
-              borderRadius: "var(--radius-lg)", minHeight: 136,
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              padding: 24, marginBottom: 20,
-              transition: "all 0.2s",
-              boxShadow: isDragging ? "0 0 0 4px rgba(180,90,53,0.15)" : "none",
-            }}
-          >
-            <label htmlFor="file-input" style={{ cursor: "pointer", width: "100%", textAlign: "center" }}>
-              {files.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
-                  {files.map((file, i) => (
-                    <span key={i} style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      background: "var(--surface)", border: "1px solid var(--border)",
-                      padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--ink)",
-                    }}>
-                      {file.name}
-                      <button
-                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }}
-                        style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex" }}
-                      >
-                        <XCircle size={12} />
-                      </button>
-                    </span>
-                  ))}
-                  <span style={{ fontSize: 12, color: "var(--clay)", fontWeight: 600, cursor: "pointer" }}>+ Add more</span>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <UploadCloud size={28} color="var(--clay)" style={{ marginBottom: 10 }} />
-                  <div style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>or click to browse</div>
-                </div>
-              )}
-            </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <button
+              onClick={() => setIngestMode("files")}
+              className={`forge-btn-secondary ${ingestMode === "files" ? "active" : ""}`}
+            >
+              Upload Files
+            </button>
+            <button
+              onClick={() => setIngestMode("text")}
+              className={`forge-btn-secondary ${ingestMode === "text" ? "active" : ""}`}
+            >
+              Paste Transcript
+            </button>
+            <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+              {ingestMode === "files" ? "Supports text, audio, CSV, JSON, PDF, and DOCX" : "Paste CALLER:/AGENT: transcript text directly"}
+            </span>
           </div>
+
+          {/* Drop zone */}
+          {ingestMode === "files" ? (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsDragging(false); setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files || [])]); }}
+              style={{
+                border: `2px dashed ${isDragging ? "var(--clay)" : "var(--border)"}`,
+                background: isDragging ? "var(--clay-tint)" : "var(--surface-2)",
+                borderRadius: "var(--radius-lg)", minHeight: 136,
+                display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center",
+                padding: 24, marginBottom: 20,
+                transition: "all 0.2s",
+                boxShadow: isDragging ? "0 0 0 4px rgba(180,90,53,0.15)" : "none",
+              }}
+            >
+              <label htmlFor="file-input" style={{ cursor: "pointer", width: "100%", textAlign: "center" }}>
+                {files.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
+                    {files.map((file, i) => (
+                      <span key={i} style={{
+                        display: "inline-flex", alignItems: "center", gap: 5,
+                        background: "var(--surface)", border: "1px solid var(--border)",
+                        padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--ink)",
+                      }}>
+                        {file.name}
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }}
+                          style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex" }}
+                        >
+                          <XCircle size={12} />
+                        </button>
+                      </span>
+                    ))}
+                    <span style={{ fontSize: 12, color: "var(--clay)", fontWeight: 600, cursor: "pointer" }}>+ Add more</span>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                    <UploadCloud size={28} color="var(--clay)" style={{ marginBottom: 10 }} />
+                    <div style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>or click to browse</div>
+                  </div>
+                )}
+              </label>
+            </div>
+          ) : (
+            <div className="forge-card" style={{ padding: 14, marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 10 }}>Paste call transcripts (CALLER: / AGENT: format)</div>
+              <textarea
+                value={rawTranscriptText}
+                onChange={(e) => setRawTranscriptText(e.target.value)}
+                placeholder={"CALLER: Hi, I’m calling about my loan options.\nAGENT: Absolutely, I can walk you through that."}
+                className="forge-textarea"
+              />
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
+                <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                  {rawTranscriptText.trim() ? `${rawTranscriptText.trim().split(/\\s+/).length} words ready for ingest` : "No transcript text pasted yet"}
+                </span>
+                <button
+                  onClick={() => setRawTranscriptText("")}
+                  disabled={!rawTranscriptText}
+                  className="forge-btn-secondary"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
           <input
             id="file-input" className="sr-only" type="file" multiple
             accept="audio/*,.txt,.eml,.json,.csv,.pdf,.docx"
             onChange={(e: ChangeEvent<HTMLInputElement>) => setFiles((prev) => [...prev, ...Array.from(e.target.files || [])])}
           />
 
-          {/* Pipeline stepper */}
-          <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 24 }}>
-            {BUILD_STEPS.map((step, i) => {
-              const done     = completedSteps.includes(step);
-              const isActive = !done && activeStepIdx === i;
-              const isLast   = i === BUILD_STEPS.length - 1;
-              return (
-                <React.Fragment key={step}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-                    <div style={{
-                      width: 26, height: 26, borderRadius: "50%",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      background: done ? "var(--clay)" : "var(--surface-2)",
-                      border: done ? "none" : isActive ? "none" : "1px solid var(--border)",
-                      boxShadow: isActive ? "0 0 0 2px var(--status-amber)" : "none",
-                      transition: "all 0.3s", flexShrink: 0,
-                    }}>
-                      {done ? <CheckCircle2 size={13} color="#fff" />
-                        : isActive ? <Loader2 size={12} color="var(--status-amber)" className="animate-spin" />
-                        : <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--border)" }} />}
-                    </div>
-                    <span style={{
-                      fontSize: 11, textAlign: "center", whiteSpace: "nowrap",
-                      fontFamily: "var(--font-mono)",
-                      color: done ? "var(--ink)" : "var(--ink-3)",
-                      transition: "color 0.3s", maxWidth: 72,
-                      overflow: "hidden", textOverflow: "ellipsis",
-                    }}>
-                      {step}
-                    </span>
-                  </div>
-                  {!isLast && (
-                    <div style={{
-                      flex: 1, height: 2, marginTop: 12, marginBottom: 20,
-                      background: "var(--border)",
-                      transition: "background 0.4s",
-                    }} />
-                  )}
-                </React.Fragment>
-              );
-            })}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 8, marginBottom: 20 }}>
+            {buildStepCards.map((step) => (
+              <div
+                key={step.key}
+                style={{
+                  background: step.active ? "var(--clay-tint)" : "var(--surface)",
+                  border: `1px solid ${step.active ? "var(--clay)" : step.done ? "rgba(62,122,69,0.28)" : "var(--border)"}`,
+                  borderRadius: "var(--radius-sm)",
+                  padding: "10px 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 11, color: step.done ? "var(--ink)" : step.active ? "var(--clay-deep)" : "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                  {step.label}
+                </span>
+                {step.done ? (
+                  <CheckCircle2 size={13} color="var(--status-green)" />
+                ) : step.active ? (
+                  <Loader2 size={13} color="var(--clay-deep)" className="spin-inline" />
+                ) : (
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--border)" }} />
+                )}
+              </div>
+            ))}
           </div>
 
           {/* Transcript stream panel — only shown when real scored turns exist */}
@@ -1651,17 +1746,17 @@ export default function Page() {
                 <Phone size={15} color="var(--status-green)" />
               </div>
               <div>
-                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Agent</h2>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Live Call</h2>
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Voice call interface · live chat test</p>
               </div>
             </div>
             <button
               onClick={callAgent}
-              disabled={busy === "call"}
+              disabled={busy === "call" || !agentReady}
               className={agentReady ? "forge-btn-success" : "forge-btn-primary"}
             >
-              {busy === "call" ? <Loader2 size={13} className="animate-spin" /> : <Phone size={13} />}
-              Call Agent
+              {busy === "call" ? <Loader2 size={13} className="spin-inline" /> : <Phone size={13} />}
+              Live Demo Call
             </button>
           </div>
 
