@@ -184,11 +184,26 @@ def load_attack_suite(user_id: str) -> list[dict[str, Any]]:
     s3 = _s3_client()
     try:
         body = s3.get_object(Bucket=_bucket(), Key=f"{user_id}/attack_suite.json")["Body"].read()
-        return json.loads(body.decode("utf-8"))
+        suite = json.loads(body.decode("utf-8"))
     except Exception:
         suite = build_default_attack_suite()
         save_attack_suite(user_id, suite)
         return suite
+
+    NEW_PERSONAS = ["nvidia_latency_exploiter", "adversarial_multilingual", "compliance_baiter"]
+    existing = {s.get("attack_persona") for s in suite}
+    updated = False
+    for persona in NEW_PERSONAS:
+        if persona not in existing:
+            suite.append({
+                "session_id": str(uuid.uuid4()),
+                "attack_persona": persona,
+                "status": "queued",
+            })
+            updated = True
+    if updated:
+        save_attack_suite(user_id, suite)
+    return suite
 
 
 def save_attack_suite(user_id: str, suite: list[dict[str, Any]]) -> str:

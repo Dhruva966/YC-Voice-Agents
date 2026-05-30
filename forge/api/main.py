@@ -46,6 +46,10 @@ from pipeline.persona_bot import (
     build_dynamic_system_prompt,
     rewrite_rag_query,
 )
+from pipeline.persona_bot_nvidia import (
+    run_persona_bot_nvidia_twilio,
+    run_persona_bot_nvidia_daily,
+)
 from rag.retriever import retrieve
 
 from pipecat.frames.frames import LLMContextFrame, LLMUpdateSettingsFrame
@@ -152,6 +156,17 @@ def _twilio_stream_url(request: Request, user_id: str) -> str:
 
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
     return f"wss://{host}/media-stream?user_id={user_id}"
+
+
+def _twilio_nvidia_stream_url(request: Request, user_id: str) -> str:
+    explicit = os.getenv("TWILIO_NVIDIA_STREAM_URL", "")
+    if explicit:
+        base = explicit.rstrip("/")
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}user_id={user_id}"
+
+    host = request.headers.get("host", "localhost")
+    return f"wss://{host}/media-stream-nvidia?user_id={user_id}"
 
 
 def _put_status(user_id: str, job_id: str, payload: dict[str, Any]) -> None:
@@ -421,6 +436,49 @@ async def twilio_inbound_for_user(user_id: str, request: Request) -> Response:
     return await _twilio_inbound_response(request, user_id)
 
 
+class NvidiaCallResponse(BaseModel):
+    room_url: str
+
+
+@app.post("/users/{user_id}/call/nvidia", response_model=NvidiaCallResponse)
+async def call_agent_nvidia(user_id: str, background_tasks: BackgroundTasks) -> NvidiaCallResponse:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
+    daily = await _create_daily_room()
+    background_tasks.add_task(
+        run_persona_bot_nvidia_daily,
+        user_id, user_id, daily["room_url"], daily["token"],
+    )
+    return NvidiaCallResponse(room_url=daily["room_url"])
+
+
+async def _twilio_nvidia_inbound_response(request: Request, user_id: str) -> Response:
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if auth_token:
+        validator = _TwilioRequestValidator(auth_token)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        url = str(request.url)
+        form_data = dict(await request.form())
+        if not validator.validate(url, form_data, signature):
+            LOGGER.warning("twilio_nvidia_signature_validation_failed url=%s", url)
+            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+    twiml = VoiceResponse()
+    connect = twiml.connect()
+    connect.stream(url=_twilio_nvidia_stream_url(request, user_id))
+    return Response(content=str(twiml), media_type="application/xml")
+
+
+@app.post("/webhook/twilio/nvidia")
+async def twilio_nvidia_inbound(request: Request) -> Response:
+    return await _twilio_nvidia_inbound_response(request, "demo")
+
+
+@app.post("/users/{user_id}/webhook/twilio/nvidia")
+async def twilio_nvidia_inbound_for_user(user_id: str, request: Request) -> Response:
+    user_id = _validate_user_id(user_id)
+    _require_built_user(user_id)
+    return await _twilio_nvidia_inbound_response(request, user_id)
+
 @app.websocket("/media-stream")
 async def media_stream(websocket: WebSocket):
     await websocket.accept()
@@ -527,6 +585,45 @@ async def media_stream(websocket: WebSocket):
             await websocket.close(code=1011)
         except Exception:
             pass
+
+
+@app.websocket("/media-stream-nvidia")
+async def media_stream_nvidia(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+        data = json.loads(raw)
+        attempts = 0
+        while data.get("event") != "start":
+            attempts += 1
+            if attempts > 50:
+                LOGGER.warning("media_stream_nvidia_no_start_event")
+                await websocket.close(code=1002)
+                return
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            data = json.loads(raw)
+        stream_sid = data["start"]["streamSid"]
+        call_sid = data["start"].get("callSid", "")
+        # Resolve user_id from callSid or fall back to "demo"
+        user_id = data["start"].get("customParameters", {}).get("user_id", "demo")
+        from pipecat.serializers.twilio import TwilioFrameSerializer
+        from pipecat.transports.websocket.fastapi import (
+            FastAPIWebsocketTransport, FastAPIWebsocketParams,
+        )
+        serializer = TwilioFrameSerializer(stream_sid=stream_sid)
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                serializer=serializer,
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+            ),
+        )
+        await run_persona_bot_nvidia_twilio(transport, user_id, user_id, stream_sid)
+    except WebSocketDisconnect:
+        LOGGER.info("media_stream_nvidia_disconnected")
+    except Exception:
+        LOGGER.exception("media_stream_nvidia_error")
 
 
 def _run_vanguard_background(user_id: str, run_id: str) -> None:
