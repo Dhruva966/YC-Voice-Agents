@@ -12,7 +12,7 @@ from typing import Any
 from openai import OpenAI
 
 from storage import s3_client as _s3_client, bucket_name as _bucket
-from finetune.persona_finetune import submit_finetune, wait_for_finetune_async
+from finetune.persona_finetune import submit_finetune, wait_for_finetune_async, save_adapter_id
 from prompts import (
     ATTACKER_PERSONAS,
     failure_annotation,
@@ -90,11 +90,14 @@ def run_improvement_cycle(
             )
         )
 
+    _MAX_ATTACK_SUITE_SIZE = int(os.getenv("MAX_ATTACK_SUITE_SIZE", "50"))
+
     adapter_id = _base_model()
     if examples:
         try:
             fine_tune_job_id = submit_finetune(user_id, examples, job_type=f"persona_cycle_{cycle_number}")
             adapter_id = asyncio.run(wait_for_finetune_async(fine_tune_job_id))
+            save_adapter_id(user_id, adapter_id, _s3_client(), _bucket())
         except Exception:
             LOGGER.exception("fine_tune_failed_using_base_model")
     else:
@@ -121,30 +124,37 @@ def run_improvement_cycle(
     )
     regression_failed = regression.get("failed", 0) > 0
     if regression_failed:
-        LOGGER.warning("regression_gate_failed_%d_regressions", regression.get("failed", 0))
-
-    suite = load_attack_suite(user_id)
-    old_size = len(suite)
-    for session in regression.get("sessions", []):
-        original = ATTACKER_PERSONAS.get(session.get("attack_persona", ""), "")
-        prompt = harder_variant_generator(
-            original,
-            json.dumps(session.get("transcript", {}), ensure_ascii=True),
-            session.get("evaluation", {}),
-        )
-        variants = _call_json_prompt(prompt).get("variants", [])
-        for variant in variants:
-            suite.append(
-                {
-                    "session_id": variant.get("variant_id") or f"cycle_{cycle_number}_{len(suite)}",
-                    "attack_persona": session.get("attack_persona"),
-                    "status": "queued",
-                    "system_prompt": variant.get("full_system_prompt"),
-                    "difficulty": variant.get("difficulty"),
-                    "tactic_change": variant.get("tactic_change"),
-                }
+        LOGGER.warning("regression_gate_failed_%d_regressions — aborting suite growth", regression.get("failed", 0))
+        suite = load_attack_suite(user_id)
+        old_size = len(suite)
+    else:
+        suite = load_attack_suite(user_id)
+        old_size = len(suite)
+        for session in regression.get("sessions", []):
+            if len(suite) >= _MAX_ATTACK_SUITE_SIZE:
+                LOGGER.info("attack_suite_cap_reached size=%d", len(suite))
+                break
+            original = ATTACKER_PERSONAS.get(session.get("attack_persona", ""), "")
+            prompt = harder_variant_generator(
+                original,
+                json.dumps(session.get("transcript", {}), ensure_ascii=True),
+                session.get("evaluation", {}),
             )
-    save_attack_suite(user_id, suite)
+            variants = _call_json_prompt(prompt).get("variants", [])
+            for variant in variants:
+                if len(suite) >= _MAX_ATTACK_SUITE_SIZE:
+                    break
+                suite.append(
+                    {
+                        "session_id": variant.get("variant_id") or f"cycle_{cycle_number}_{len(suite)}",
+                        "attack_persona": session.get("attack_persona"),
+                        "status": "queued",
+                        "system_prompt": variant.get("full_system_prompt"),
+                        "difficulty": variant.get("difficulty"),
+                        "tactic_change": variant.get("tactic_change"),
+                    }
+                )
+        save_attack_suite(user_id, suite)
 
     before = float(vanguard_summary.get("pass_rate", 0.0))
     after = float(regression.get("pass_rate", before))

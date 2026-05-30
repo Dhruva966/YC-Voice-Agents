@@ -16,7 +16,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-_LOCAL_DATA_DIR = Path("./local_data")
+_LOCAL_DATA_DIR = Path(os.getenv("LOCAL_DATA_DIR", str(Path(__file__).parent / "local_data")))
 
 
 def _is_local() -> bool:

@@ -87,12 +87,14 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Forge", version="0.1.0", lifespan=lifespan)
 _allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",") if o.strip()]
+if "*" in _allowed_origins:
+    raise RuntimeError("ALLOWED_ORIGINS cannot be '*' when allow_credentials=True — set explicit origins")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "X-Twilio-Signature", "Authorization"],
 )
 
 
@@ -271,7 +273,10 @@ def _run_build(user_id: str, job_id: str) -> None:
         fine_tune_job_id = None
         fine_tune_error = None
         try:
+            from finetune.persona_finetune import save_adapter_id as _save_adapter_id, wait_for_finetune
             fine_tune_job_id = submit_finetune(user_id, examples, "initial")
+            adapter_id = wait_for_finetune(fine_tune_job_id)
+            _save_adapter_id(user_id, adapter_id, s3, bucket)
         except Exception as exc:
             LOGGER.exception("initial_fine_tune_failed_using_base_model")
             fine_tune_error = str(exc)
@@ -288,7 +293,11 @@ def _run_build(user_id: str, job_id: str) -> None:
             },
         )
     except Exception as exc:
-        _put_status(user_id, job_id, {"job_id": job_id, "stage": "failed", "status": "failed", "error": str(exc)})
+        LOGGER.exception("build_failed user_id=%s job_id=%s", user_id, job_id)
+        try:
+            _put_status(user_id, job_id, {"job_id": job_id, "stage": "failed", "status": "failed", "error": "Build pipeline failed. Check server logs."})
+        except Exception:
+            LOGGER.exception("put_status_failed_during_build_error user_id=%s job_id=%s", user_id, job_id)
 
 
 @app.post("/users/{user_id}/build", response_model=QueuedResponse)
@@ -450,7 +459,6 @@ async def media_stream(websocket: WebSocket):
 
 def _run_vanguard_background(user_id: str, run_id: str) -> None:
     import threading
-    _vanguard_live[run_id] = []
     _vanguard_live_totals[run_id] = -1  # -1 = initializing, -2 = error
     try:
         suite = load_attack_suite(user_id)
@@ -475,24 +483,31 @@ async def vanguard_run(user_id: str, background_tasks: BackgroundTasks) -> Queue
     return QueuedResponse(run_id=run_id, status="queued")
 
 
-@app.get("/users/{user_id}/vanguard/runs")
-async def vanguard_runs(user_id: str) -> list[dict[str, Any]]:
+def _vanguard_runs_sync(user_id: str) -> list[dict[str, Any]]:
     runs = []
     for key in _list_keys(f"{user_id}/vanguard_runs/"):
         if key.endswith(".json"):
-            data = _get_json_key(key)
-            runs.append(
-                {
-                    "run_id": data.get("run_id"),
-                    "total": data.get("total"),
-                    "passed": data.get("passed"),
-                    "failed": data.get("failed"),
-                    "pass_rate": data.get("pass_rate"),
-                    "duration_seconds": data.get("duration_seconds"),
-                    "timestamp": data.get("timestamp"),
-                }
-            )
+            try:
+                data = _get_json_key(key)
+                runs.append(
+                    {
+                        "run_id": data.get("run_id"),
+                        "total": data.get("total"),
+                        "passed": data.get("passed"),
+                        "failed": data.get("failed"),
+                        "pass_rate": data.get("pass_rate"),
+                        "duration_seconds": data.get("duration_seconds"),
+                        "timestamp": data.get("timestamp"),
+                    }
+                )
+            except Exception:
+                continue
     return sorted(runs, key=_vanguard_run_sort_key)
+
+
+@app.get("/users/{user_id}/vanguard/runs")
+async def vanguard_runs(user_id: str) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_vanguard_runs_sync, user_id)
 
 
 @app.get("/users/{user_id}/vanguard/runs/{run_id}")
