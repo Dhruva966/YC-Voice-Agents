@@ -205,11 +205,12 @@ async def run_vanguard(
 
 
 def build_default_attack_suite() -> list[dict[str, Any]]:
-    personas = list(ATTACKER_PERSONAS)
-    repeated = personas + personas[:4]
+    # 9 sessions: one per persona, first 9 of the 10 defined personas.
+    # Keeps concurrent Daily room count manageable for demo hardware.
+    personas = list(ATTACKER_PERSONAS)[:9]
     return [
         {"session_id": str(uuid.uuid4()), "attack_persona": persona, "status": "queued"}
-        for persona in repeated
+        for persona in personas
     ]
 
 
