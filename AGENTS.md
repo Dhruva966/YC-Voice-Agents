@@ -2,49 +2,26 @@
 
 Canonical reference: **[CLAUDE.md](CLAUDE.md)** — read it first and in full.
 
-This file is an adapter for Codex and other non-Claude AI coding agents. It adds Codex-specific agent stubs and a gstack skill catalog. For architecture, data contracts, security rules, testing standards, task patterns, environment variables, and the complete API surface, see CLAUDE.md.
+This is a thin adapter for Codex and other non-Claude AI coding agents. Do not duplicate project policy here: architecture, data contracts, security rules, testing standards, task patterns, environment variables, and API surface all live in CLAUDE.md.
 
 ---
 
-## Model Routing
-| Task Type | Model |
-|-----------|-------|
-| Isolated edits, boilerplate, narrow transforms (1–2 files) | Haiku |
-| Feature implementation, multi-file integration, refactors | Sonnet |
-| Architecture decisions, root-cause analysis, security review | Opus |
+## How To Load Context
 
-Escalate only when the lower tier fails with a clear reasoning gap.
-
----
-
-## Quick Orientation
-
-| What | Where |
-|------|-------|
-| FastAPI app + all routes | `forge/api/main.py` |
-| Pipecat voice pipeline | `forge/pipeline/persona_bot.py:run_persona_bot()` |
-| All prompts (never inline) | `forge/prompts.py` |
-| Storage shim | `forge/storage.py` (never `import boto3` directly) |
-| RAG | `forge/rag/retriever.py` |
-| Transcript scorer | `forge/ingestion/transcript_scorer.py` |
-
-Three rules that matter most:
-1. All prompts in `prompts.py` — never inline LLM strings
-2. All storage via `storage.py` shim — never raw `boto3`
-3. Long-running work in `BackgroundTasks` — never block the event loop
+1. Read CLAUDE.md first.
+2. If editing an interface boundary, read HANDOFF.md.
+3. If editing a subsystem, read only that subsystem's `CLAUDE.md`:
+   - `forge/api/CLAUDE.md`
+   - `forge/pipeline/CLAUDE.md`
+   - `forge/ingestion/CLAUDE.md`
+   - `forge/vanguard/CLAUDE.md`
+4. Use README.md and DEPLOYMENT.md for operator-facing setup context.
 
 ---
 
-## Subsystem Module Docs
+## Capability Routing
 
-Each subsystem has a module-level `CLAUDE.md` with allowed patterns, forbidden patterns, and what not to do:
-
-| Module | Doc |
-|--------|-----|
-| API routes | `forge/api/CLAUDE.md` |
-| Gemini Live pipeline | `forge/pipeline/CLAUDE.md` |
-| Ingestion + transcript scorer | `forge/ingestion/CLAUDE.md` |
-| Vanguard adversarial testing | `forge/vanguard/CLAUDE.md` |
+Map the capability tiers in CLAUDE.md to the current agent instead of using Claude model names literally. For Codex, use the default coding model for routine work and the strongest available reasoning effort/model for architecture, root-cause, security, deployment, data-loss, or multi-system changes.
 
 ---
 
@@ -53,39 +30,41 @@ Each subsystem has a module-level `CLAUDE.md` with allowed patterns, forbidden p
 ```toml
 [agents.implementer]
 description = "Implement a single task. Read CLAUDE.md and the relevant subsystem CLAUDE.md first. Verify output matches the spec exactly — do not summarize."
-model = "codex-1"
+model = "default"
 
 [agents.spec-reviewer]
 description = "Verify implementation matches spec. Read the actual code — do not trust the implementer's report. Check: correct files modified, no extra changes, edge cases handled."
-model = "codex-1"
+model = "default"
 
 [agents.quality-reviewer]
 description = "Verify implementation is clean, tested, and maintainable. Check: no inline prompts (all prompts in prompts.py), no raw boto3 (use storage shim), no hardcoded values, tests exist."
-model = "codex-1"
+model = "default"
 
 [agents.transcript-scorer-agent]
 description = "Score and select best transcript segments. Use NVIDIA NIM for scoring. Return top-K turns per dimension as NVIDIA NIM finetune JSONL."
-model = "codex-1"
+model = "default"
 
 [agents.vanguard-analyst]
 description = "Analyze a Vanguard run result. Identify failure patterns per persona. Propose harder attack variants for the next cycle."
-model = "codex-1"
+model = "default"
 ```
 
 ---
 
-## Skill Catalog
+## Workflow Mapping
+
+Use these as intent mappings, not literal slash commands unless the current tool supports them.
 
 | Trigger | Skill | Phase |
 |---------|-------|-------|
-| New feature idea | /office-hours | Ideation |
-| Starting feature | /autoplan + writing-plans | Planning |
-| Multi-file work | subagent-driven-development | Implement |
-| Parallel tasks | using-git-worktrees | Implement |
-| Pre-PR | /review + /qa | Review |
-| Security check | /cso | Review |
-| Health check | /health | Review |
-| Shipping | /ship → /land-and-deploy | Release |
-| Post-deploy | /canary | Release |
-| Weekly | /retro + /learn | Reflect |
-| Save context | /context-save | Any |
+| New feature idea | office-hours | Ideation |
+| Starting feature | writing-plans | Planning |
+| Multi-file work | parallel-agent-coordination when delegation is useful | Implement |
+| Parallel tasks | source-command-parallel-agents / using-git-worktrees | Implement |
+| Pre-PR | review + qa | Review |
+| Security check | security-review | Review |
+| Health check | health/validation check | Review |
+| Shipping | ship / land-and-deploy equivalent | Release |
+| Post-deploy | canary/monitor equivalent | Release |
+| Weekly | retro + learn equivalent | Reflect |
+| Save context | context-save | Any |

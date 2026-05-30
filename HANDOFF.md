@@ -8,21 +8,21 @@ Contracts between subsystems. Read this when touching an interface boundary.
 [Browser / Twilio caller]
         │
         ▼
-[api/main.py] ─── background thread ──► [pipeline/persona_bot.py]
+[forge/api/main.py] ─── background thread ──► [forge/pipeline/persona_bot.py]
         │                                         │
         │                               [Gemini 3.1 Flash Live]
-        │                               [rag/retriever.py]
+        │                               [forge/rag/retriever.py]
         │
-        ├── _run_build() ──────────────► [ingestion/pipeline.py]
-        │                                    └── [ingestion/transcript_scorer.py]
-        │                                    └── [personality/extractor.py]
-        │                                    └── [rag/retriever.py]
-        │                                    └── [finetune/persona_finetune.py]
+        ├── _run_build() ──────────────► [forge/ingestion/pipeline.py]
+        │                                    └── [forge/ingestion/transcript_scorer.py]
+        │                                    └── [forge/personality/extractor.py]
+        │                                    └── [forge/rag/retriever.py]
+        │                                    └── [forge/finetune/persona_finetune.py]
         │
-        └── _run_vanguard_background() ► [vanguard/orchestrator.py]
-                                              └── [pipeline/attacker_bot.py]
-                                              └── [cekura/evaluator.py]
-                                              └── [autoloop/loop_controller.py]
+        └── _run_vanguard_background() ► [forge/vanguard/orchestrator.py]
+                                              └── [forge/pipeline/attacker_bot.py]
+                                              └── [forge/cekura/evaluator.py]
+                                              └── [forge/autoloop/loop_controller.py]
 ```
 
 ---
@@ -30,8 +30,8 @@ Contracts between subsystems. Read this when touching an interface boundary.
 ## Data Contracts
 
 ### `ingest_file()` → build pipeline
-**Producer:** `ingestion/pipeline.py:ingest_file()`
-**Consumer:** `api/main.py:_run_build()` via `get_user_corpus()`, `get_user_transcripts()`, `get_user_knowledge_base_texts()`
+**Producer:** `forge/ingestion/pipeline.py:ingest_file()`
+**Consumer:** `forge/api/main.py:_run_build()` via `get_user_corpus()`, `get_user_transcripts()`, `get_user_knowledge_base_texts()`
 
 ```python
 # ingest_file returns:
@@ -44,8 +44,8 @@ Contracts between subsystems. Read this when touching an interface boundary.
 ```
 
 ### `score_transcripts()` → fine-tune pipeline
-**Producer:** `ingestion/transcript_scorer.py:score_transcripts()`
-**Consumer:** `finetune/persona_finetune.py:generate_synthetic_conversations()`
+**Producer:** `forge/ingestion/transcript_scorer.py:score_transcripts()`
+**Consumer:** `forge/finetune/persona_finetune.py:generate_synthetic_conversations()`
 
 ```python
 # ScoredTranscriptResult shape:
@@ -75,8 +75,8 @@ Contracts between subsystems. Read this when touching an interface boundary.
 ```
 
 ### `extract_personality()` → persona pipeline
-**Producer:** `personality/extractor.py:extract_personality()`
-**Consumer:** `pipeline/persona_bot.py:build_initial_system_prompt()`, `prompts.py:persona_system()`
+**Producer:** `forge/personality/extractor.py:extract_personality()`
+**Consumer:** `forge/pipeline/persona_bot.py:build_initial_system_prompt()`, `forge/prompts.py:persona_system()`
 
 ```python
 # personality_spec.json shape:
@@ -98,8 +98,8 @@ Contracts between subsystems. Read this when touching an interface boundary.
 ```
 
 ### `run_vanguard()` → improvement loop
-**Producer:** `vanguard/orchestrator.py:run_vanguard()`
-**Consumer:** `autoloop/loop_controller.py:run_improvement_cycle()`
+**Producer:** `forge/vanguard/orchestrator.py:run_vanguard()`
+**Consumer:** `forge/autoloop/loop_controller.py:run_improvement_cycle()`
 
 ```python
 # Vanguard run result (stored at {user_id}/vanguard_runs/{run_id}.json):
@@ -140,8 +140,8 @@ Contracts between subsystems. Read this when touching an interface boundary.
 ```
 
 ### `evaluate_transcript()` → vanguard sessions
-**Producer:** `cekura/evaluator.py:evaluate_transcript()`
-**Consumer:** `vanguard/orchestrator.py:_run_one_session()`
+**Producer:** `forge/cekura/evaluator.py:evaluate_transcript()`
+**Consumer:** `forge/vanguard/orchestrator.py:_run_one_session()`
 
 ```python
 # Evaluation result:
@@ -172,12 +172,12 @@ When modifying an interface, verify all consumers:
 
 | Interface | Producers | Consumers |
 |-----------|-----------|-----------|
-| `ingest_file()` return shape | `ingestion/pipeline.py` | `api/main.py:_run_build()` |
-| `ScoredTranscriptResult` | `ingestion/transcript_scorer.py` | `finetune/persona_finetune.py`, `frontend score cards` |
-| `personality_spec.json` | `personality/extractor.py` | `prompts.py:persona_system()`, `pipeline/persona_bot.py` |
-| Vanguard run JSON | `vanguard/orchestrator.py` | `api/main.py:vanguard_runs()`, `autoloop/loop_controller.py`, `frontend` |
-| Evaluation result | `cekura/evaluator.py` | `vanguard/orchestrator.py:_run_one_session()` |
-| Attack suite JSON | `vanguard/orchestrator.py` | `api/main.py:load_attack_suite()`, `autoloop/loop_controller.py` |
+| `ingest_file()` return shape | `forge/ingestion/pipeline.py` | `forge/api/main.py:_run_build()` |
+| `ScoredTranscriptResult` | `forge/ingestion/transcript_scorer.py` | `forge/finetune/persona_finetune.py`, frontend score cards |
+| `personality_spec.json` | `forge/personality/extractor.py` | `forge/prompts.py:persona_system()`, `forge/pipeline/persona_bot.py` |
+| Vanguard run JSON | `forge/vanguard/orchestrator.py` | `forge/api/main.py:vanguard_runs()`, `forge/autoloop/loop_controller.py`, frontend |
+| Evaluation result | `forge/cekura/evaluator.py` | `forge/vanguard/orchestrator.py:_run_one_session()` |
+| Attack suite JSON | `forge/vanguard/orchestrator.py` | `forge/api/main.py:load_attack_suite()`, `forge/autoloop/loop_controller.py` |
 
 ---
 

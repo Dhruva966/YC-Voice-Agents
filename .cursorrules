@@ -27,10 +27,12 @@ Canonical reference: **CLAUDE.md** (read first and in full).
 2. **All storage via `storage.py` shim** — never `import boto3; boto3.client("s3", ...)`
 3. **Long-running work in `BackgroundTasks`** — never block FastAPI's async event loop
 
-## Model Routing
+## Capability Routing
 
 | Task | Model |
 |------|-------|
-| Isolated edits, boilerplate (1–2 files) | Haiku |
-| Feature implementation, multi-file refactors | Sonnet |
-| Architecture, security review, root-cause | Opus |
+| Isolated edits, boilerplate (1-2 files) | small/fast model |
+| Feature implementation, multi-file refactors | standard coding model |
+| Architecture, security review, root-cause | strongest available reasoning model |
+
+Map these tiers to Cursor's available models. Do not treat Claude model names in CLAUDE.md as literal requirements for Cursor.

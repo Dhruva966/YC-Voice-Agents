@@ -59,39 +59,43 @@ forge/
                                 ATTACKER_PERSONAS (8), eval rubrics, finetune formatters
 ```
 
-## Agent Model Routing
-| Task Type | Model |
-|-----------|-------|
-| Isolated edits, boilerplate, narrow transforms (1–2 files) | Haiku |
-| Feature implementation, multi-file integration, refactors | Sonnet |
-| Architecture decisions, root-cause analysis, security review | Opus |
+## Agent Capability Routing
+Use the strongest available local agent/model tier that matches the risk of the task. These names are Claude Code defaults, but other tools should map them to their nearest equivalent instead of treating the names literally.
 
-Escalate only when lower tier fails with a clear reasoning gap.
+| Task Type | Claude Code tier | Generic equivalent |
+|-----------|------------------|--------------------|
+| Isolated edits, boilerplate, narrow transforms (1-2 files) | Haiku | small/fast coding model |
+| Feature implementation, multi-file integration, refactors | Sonnet | standard coding/reasoning model |
+| Architecture decisions, root-cause analysis, security review | Opus | strongest available reasoning model |
+
+Escalate only when the current tier shows a clear reasoning gap, the blast radius grows, or the task crosses a high-risk boundary such as auth, security, data loss, deployment, or external billing.
 
 ## Key Entry Points
 | What | Where |
 |------|-------|
-| FastAPI app | `api/main.py:app` |
-| Pipecat voice pipeline (Daily) | `pipeline/persona_bot.py:run_persona_bot()` |
-| Twilio inbound webhook | `api/main.py:POST /webhook/twilio/inbound` |
-| Twilio media stream (Gemini Live) | `api/main.py:WS /media-stream` |
-| Daily room call | `api/main.py:POST /users/{user_id}/call` |
-| Build pipeline | `api/main.py:POST /users/{user_id}/build` → `_run_build()` |
-| Transcript scoring | `ingestion/transcript_scorer.py:score_transcripts()` |
-| Vanguard attack | `api/main.py:POST /users/{user_id}/vanguard/run` |
-| Improvement cycle | `api/main.py:POST /users/{user_id}/vanguard/improve` |
-| All prompts | `prompts.py` — edit here only, never inline |
-| Storage shim | `storage.py:s3_client(), bucket_name()` |
-| RAG | `rag/retriever.py:retrieve(), build_knowledge_base()` |
-| Fine-tune | `finetune/persona_finetune.py:submit_finetune()` |
-| Dashboard data | `api/main.py:GET /users/{user_id}/dashboard` |
+| FastAPI app | `forge/api/main.py:app` |
+| Pipecat voice pipeline (Daily) | `forge/pipeline/persona_bot.py:run_persona_bot()` |
+| Twilio inbound webhook | `forge/api/main.py:POST /webhook/twilio/inbound` |
+| Twilio media stream (Gemini Live) | `forge/api/main.py:WS /media-stream` |
+| Daily room call | `forge/api/main.py:POST /users/{user_id}/call` |
+| Build pipeline | `forge/api/main.py:POST /users/{user_id}/build` -> `_run_build()` |
+| Transcript scoring | `forge/ingestion/transcript_scorer.py:score_transcripts()` |
+| Vanguard attack | `forge/api/main.py:POST /users/{user_id}/vanguard/run` |
+| Improvement cycle | `forge/api/main.py:POST /users/{user_id}/vanguard/improve` |
+| All prompts | `forge/prompts.py` - edit here only, never inline |
+| Storage shim | `forge/storage.py:s3_client(), bucket_name()` |
+| RAG | `forge/rag/retriever.py:retrieve(), build_knowledge_base()` |
+| Fine-tune | `forge/finetune/persona_finetune.py:submit_finetune()` |
+| Dashboard data | `forge/api/main.py:GET /users/{user_id}/dashboard` |
 
 ## Database Schema
+
+All paths in this section are repo-root relative unless they explicitly start with `./local_data`.
 
 **ChromaDB collection:** `user_{user_id}`
 - Each document: transcript segment or knowledge chunk
 - Metadata: `source`, `turn_index`, `quality_score`, `persona_dimension`
-- Queried via: `rag/retriever.py:retrieve(user_id, query, top_k=5)`
+- Queried via: `forge/rag/retriever.py:retrieve(user_id, query, top_k=5)`
 
 **Fine-tune training data:** `./local_data/{user_id}/finetune/examples.jsonl`
 ```jsonl
@@ -138,30 +142,30 @@ Sequential: shared state (`prompts.py`, `storage.py`, RAG) or ordering dependenc
 ## Common Task Patterns
 
 ### Adding a new API endpoint
-1. Add route to `api/main.py`
+1. Add route to `forge/api/main.py`
 2. Wrap long-running work in `BackgroundTasks`
 3. Persist result via `_s3_client().put_object(...)` with status polling key
 4. Add status endpoint if async
-5. Wire into `frontend/app/page.tsx` — fetch + state
+5. Wire into `forge/frontend/app/page.tsx` - fetch + state
 
 ### Extending the transcript pipeline
-1. Add step to `ingestion/pipeline.py:ingest_file()`
-2. Add any new prompts to `prompts.py` only — never inline
-3. Update `api/main.py:_run_build()` stage name for status reporting
-4. Update `BUILD_STEPS` in `frontend/app/page.tsx`
+1. Add step to `forge/ingestion/pipeline.py:ingest_file()`
+2. Add any new prompts to `forge/prompts.py` only - never inline
+3. Update `forge/api/main.py:_run_build()` stage name for status reporting
+4. Update `BUILD_STEPS` in `forge/frontend/app/page.tsx`
 
 ### Adding a new attacker persona
-1. Add key + prompt string to `prompts.py:ATTACKER_PERSONAS`
-2. `vanguard/orchestrator.py:build_default_attack_suite()` picks it up automatically
+1. Add key + prompt string to `forge/prompts.py:ATTACKER_PERSONAS`
+2. `forge/vanguard/orchestrator.py:build_default_attack_suite()` picks it up automatically
 
 ### Modifying the Gemini Live system prompt
-1. Edit `prompts.py:persona_system()`
-2. `_TwilioDynamicUpdater` in `api/main.py` re-injects on every LLM context frame — no restart needed
+1. Edit `forge/prompts.py:persona_system()`
+2. `_TwilioDynamicUpdater` in `forge/api/main.py` re-injects on every LLM context frame - no restart needed
 
 ### Running a fine-tune job
-1. Score transcripts → `ingestion/transcript_scorer.py:score_transcripts()`
-2. Format top-K → `finetune/persona_finetune.py:generate_synthetic_conversations()`
-3. Submit → `submit_finetune(user_id, examples, label)` → NVIDIA Customization API
+1. Score transcripts -> `forge/ingestion/transcript_scorer.py:score_transcripts()`
+2. Format top-K -> `forge/finetune/persona_finetune.py:generate_synthetic_conversations()`
+3. Submit -> `submit_finetune(user_id, examples, label)` -> NVIDIA Customization API
 4. Adapter ID saved to `./local_data/{user_id}/adapter_id.txt`
 
 ### Testing Vanguard locally
@@ -172,14 +176,16 @@ curl http://localhost:8000/users/demo/vanguard/runs/<run_id>/live
 ```
 
 ## gstack + Superpowers Workflow
-| Phase | Tools |
-|-------|-------|
-| 1 IDEATION | /office-hours |
-| 2 PLANNING | /autoplan → writing-plans → blueprint |
-| 3 IMPLEMENT | subagent-driven-development + using-git-worktrees |
-| 4 REVIEW | /review → /qa → /cso → /health |
-| 5 RELEASE | /ship → /land-and-deploy → /canary |
-| 6 REFLECT | /retro → /learn → context-save |
+Treat this as a workflow map. Use slash commands only in tools that support them; otherwise use the equivalent local skill, review process, or manual checklist.
+
+| Phase | Claude Code commands | Generic equivalent |
+|-------|----------------------|--------------------|
+| 1 IDEATION | `/office-hours` | office-hours critique |
+| 2 PLANNING | `/autoplan` -> writing-plans -> blueprint | plan, decompose, define checks |
+| 3 IMPLEMENT | subagent-driven-development + using-git-worktrees | bounded implementation with clear file ownership |
+| 4 REVIEW | `/review` -> `/qa` -> `/cso` -> `/health` | code review, QA, security review, health checks |
+| 5 RELEASE | `/ship` -> `/land-and-deploy` -> `/canary` | release workflow, deploy, monitor |
+| 6 REFLECT | `/retro` -> `/learn` -> context-save | retro, durable learning, handoff |
 
 ## Environment Setup
 | Variable | Required | Purpose |
@@ -207,21 +213,23 @@ curl http://localhost:8000/users/demo/vanguard/runs/<run_id>/live
 | `PERSONA_AGENT_URL` | optional | `http://localhost:8000` local / `http://backend:8000` docker |
 | `HUGGINGFACE_TOKEN` | optional | Better pyannote diarization (fallback works without it) |
 
-## Skill routing
+## Agent Tool Routing
 
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+Use the equivalent workflow mechanism in the current tool. Claude Code can use slash commands and Claude skills; Codex should use Codex skills, tools, or explicit subagents; Cursor/Windsurf should follow their native rule system. Do not copy Claude-only mechanics into other adapters.
 
 Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
-- Author a backlog-ready spec/issue → invoke /spec
+- Product ideas/brainstorming -> office-hours style critique
+- Strategy/scope -> plan review before implementation
+- Architecture -> engineering plan review
+- Design system/plan review -> design critique before coding
+- Full review pipeline -> plan, implement, review, verify
+- Bugs/errors -> systematic investigation before fixes
+- QA/testing site behavior -> browser or integration QA
+- Code review/diff check -> bug-risk-first code review
+- Visual polish -> design review with screenshots when possible
+- Ship/deploy/PR -> release workflow with checks and rollback awareness
+- Save progress -> context-save handoff
+- Resume context -> context-restore handoff
+- Author a backlog-ready spec/issue -> concise spec with acceptance criteria
+
+Agent-specific adapter files should stay thin and point back here instead of duplicating this policy.

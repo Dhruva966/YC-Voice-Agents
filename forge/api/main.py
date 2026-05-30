@@ -261,7 +261,12 @@ async def build(user_id: str, background_tasks: BackgroundTasks) -> QueuedRespon
 
 @app.get("/users/{user_id}/build/status")
 async def build_status(user_id: str) -> dict[str, Any]:
-    return _get_json_key(f"{user_id}/build_status/latest.json")
+    try:
+        return _get_json_key(f"{user_id}/build_status/latest.json")
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "NoSuchKey":
+            return {"status": "none", "stage": "none"}
+        raise
 
 
 @app.post("/join_room")

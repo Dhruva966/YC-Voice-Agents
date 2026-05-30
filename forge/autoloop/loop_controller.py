@@ -40,7 +40,11 @@ def _call_json_prompt(prompt: dict[str, str]) -> dict[str, Any]:
     )
     raw = response.choices[0].message.content or "{}"
     raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        LOGGER.warning("json_parse_failed_returning_empty: %s", raw[:200])
+        return {}
 
 
 def _conversation_history_until_failure(transcript: dict[str, Any], failure_turn: int) -> list[dict[str, str]]:

@@ -31,9 +31,15 @@ class _LocalS3Client:
     """Minimal S3-compatible client backed by the local filesystem."""
 
     def _path(self, key: str) -> Path:
-        # Prevent escaping the local_data directory via path traversal
+        # Prevent path traversal: resolve to absolute and assert we stay inside local_data
         safe_key = key.lstrip("/")
-        return _LOCAL_DATA_DIR / safe_key
+        dest = (_LOCAL_DATA_DIR / safe_key).resolve()
+        base = _LOCAL_DATA_DIR.resolve()
+        try:
+            dest.relative_to(base)
+        except ValueError:
+            raise ValueError(f"Path traversal blocked: {key!r}")
+        return dest
 
     def put_object(self, Bucket: str, Key: str, Body: bytes | str, **kwargs: Any) -> dict[str, Any]:
         dest = self._path(Key)
