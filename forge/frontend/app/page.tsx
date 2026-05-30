@@ -5,8 +5,8 @@ import dynamic from "next/dynamic";
 import { Fira_Code } from "next/font/google";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  CartesianGrid, Line, LineChart, ResponsiveContainer,
-  Tooltip, XAxis, YAxis,
+  CartesianGrid, Line, LineChart, Radar, RadarChart, PolarGrid, PolarAngleAxis,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
   CheckCircle2, XCircle, Loader2, Phone, Link as LinkIcon, Copy,
@@ -280,6 +280,93 @@ function ImprovementChart({ data }: { data: ChartPoint[] }) {
   );
 }
 const ImprovementChartNoSsr = dynamic(() => Promise.resolve(ImprovementChart), { ssr: false });
+
+/* ─────────── PersonalityConstellation (no-SSR) ─────────── */
+function PersonalityConstellation({ scores }: { scores: DimensionScoreCard | null }) {
+  const [revealed, setRevealed] = useState(0);
+
+  const data = useMemo(() => {
+    if (!scores) return [];
+    return Object.entries(scores).map(([key, val]) => ({
+      dimension: DIMENSION_LABELS[key] || key.replace(/_/g, " "),
+      abbr: (DIMENSION_LABELS[key] || key).split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 3),
+      value: Math.round((val / 10) * 100),
+      fullMark: 100,
+    }));
+  }, [scores]);
+
+  const animatedData = data.map((d, i) => ({ ...d, value: i < revealed ? d.value : 0 }));
+
+  useEffect(() => {
+    if (data.length === 0) { setRevealed(0); return; }
+    setRevealed(0);
+    let count = 0;
+    let cancelled = false;
+    const t = setInterval(() => {
+      if (cancelled) return;
+      count = Math.min(count + 1, data.length);
+      setRevealed(count);
+      if (count >= data.length) clearInterval(t);
+    }, 220);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [data.length]);
+
+  if (!scores) return null;
+  return (
+    <div style={{
+      background: "var(--surface)", border: "1px solid var(--border)",
+      borderRadius: "var(--radius-lg)", padding: 16, marginBottom: 20,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div className="forge-section-label">PERSONALITY CONSTELLATION</div>
+        <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+          {revealed}/{data.length} dimensions mapped
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+        <div style={{ flex: "0 0 220px", height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <RadarChart data={animatedData} margin={{ top: 8, right: 16, bottom: 8, left: 16 }}>
+              <PolarGrid stroke="var(--border)" />
+              <PolarAngleAxis dataKey="dimension" tick={{ fill: "var(--ink-3)", fontSize: 9, fontFamily: "var(--font-mono)" }} />
+              <Radar name="Score" dataKey="value" stroke="var(--clay)" fill="var(--clay)" fillOpacity={0.18} strokeWidth={2} />
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+          <AnimatePresence>
+            {data.slice(0, revealed).map((d, i) => {
+              const color = d.value >= 70 ? "var(--status-green)" : d.value >= 40 ? "var(--status-amber)" : "var(--status-red)";
+              return (
+                <motion.div key={d.dimension} initial={{ opacity: 0, x: 14 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.26 }}
+                  style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                    background: `color-mix(in srgb, ${color} 14%, var(--surface-2))`,
+                    border: `1.5px solid ${color}55`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 8, fontWeight: 700, fontFamily: "var(--font-mono)", color,
+                  }}>{d.abbr}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                      <span style={{ fontSize: 11, color: "var(--ink)", fontWeight: 500 }}>{d.dimension}</span>
+                      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700, color }}>{d.value}%</span>
+                    </div>
+                    <div style={{ height: 3, background: "var(--border)", borderRadius: 2 }}>
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${d.value}%` }} transition={{ duration: 0.5, delay: 0.1 }}
+                        style={{ height: "100%", background: `linear-gradient(90deg,${color}60,${color})`, borderRadius: 2 }} />
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+      </div>
+    </div>
+  );
+}
+const PersonalityConstellationNoSsr = dynamic(() => Promise.resolve(PersonalityConstellation), { ssr: false });
 
 /* ─────────── Waveform bars ──────────────────────────────── */
 const WAVE_CONFIGS = [

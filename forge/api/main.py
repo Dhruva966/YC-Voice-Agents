@@ -25,9 +25,32 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+from fastapi import WebSocket
+from fastapi.responses import Response
+from fastapi.websockets import WebSocketDisconnect
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import LLMContextFrame, LLMUpdateSettingsFrame
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.serializers.twilio import TwilioFrameSerializer
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+from pipecat.services.llm_service import LLMSettings
+from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketParams,
+    FastAPIWebsocketTransport,
+)
+from twilio.request_validator import RequestValidator as _TwilioRequestValidator
+from twilio.twiml.voice_response import VoiceResponse
 
-from pipeline.persona_bot import build_dynamic_system_prompt, run_persona_bot
+from pipeline.persona_bot import (
+    DynamicPersonaContext,
+    build_dynamic_system_prompt,
+    rewrite_rag_query,
+    run_persona_bot,
+)
+from pipeline.persona_bot_nvidia import run_persona_bot_nvidia_daily, run_persona_bot_nvidia_twilio
 from storage import s3_client as _s3_client, bucket_name as _bucket
 from autoloop.loop_controller import run_improvement_cycle
 from finetune.persona_finetune import generate_synthetic_conversations, submit_finetune
@@ -40,7 +63,7 @@ from ingestion.pipeline import (
 from ingestion.transcript_scorer import score_transcripts
 from personality.extractor import extract_personality, load_personality_spec, save_personality_spec
 from prompts import persona_system
-from rag.retriever import build_knowledge_base, init_db
+from rag.retriever import build_knowledge_base, init_db, retrieve
 from vanguard.orchestrator import load_attack_suite, run_vanguard
 from voice.clone import create_voice_clone
 
@@ -107,6 +130,7 @@ class QueuedResponse(BaseModel):
 
 class CallResponse(BaseModel):
     room_url: str
+    phone_number: str = ""
 
 
 class JoinRoomRequest(BaseModel):
@@ -327,7 +351,7 @@ async def twilio_inbound(request: Request) -> Response:
 
 @app.post("/users/{user_id}/webhook/twilio/inbound")
 async def twilio_inbound_for_user(user_id: str, request: Request) -> Response:
-    user_id = _validate_user_id(user_id)
+    _validate_user_id(user_id)
     _require_built_user(user_id)
     return await _twilio_inbound_response(request, user_id)
 
@@ -338,7 +362,7 @@ class NvidiaCallResponse(BaseModel):
 
 @app.post("/users/{user_id}/call/nvidia", response_model=NvidiaCallResponse)
 async def call_agent_nvidia(user_id: str, background_tasks: BackgroundTasks) -> NvidiaCallResponse:
-    user_id = _validate_user_id(user_id)
+    _validate_user_id(user_id)
     _require_built_user(user_id)
     daily = await _create_daily_room()
     background_tasks.add_task(
@@ -371,7 +395,7 @@ async def twilio_nvidia_inbound(request: Request) -> Response:
 
 @app.post("/users/{user_id}/webhook/twilio/nvidia")
 async def twilio_nvidia_inbound_for_user(user_id: str, request: Request) -> Response:
-    user_id = _validate_user_id(user_id)
+    _validate_user_id(user_id)
     _require_built_user(user_id)
     return await _twilio_nvidia_inbound_response(request, user_id)
 
@@ -486,6 +510,14 @@ async def media_stream(websocket: WebSocket):
 @app.websocket("/media-stream-nvidia")
 async def media_stream_nvidia(websocket: WebSocket):
     await websocket.accept()
+    # user_id is embedded in the WebSocket URL by _twilio_nvidia_stream_url; read it here
+    # before the Twilio framing starts so we know whose persona to load.
+    try:
+        user_id = websocket.query_params.get("user_id", "demo")
+        _validate_user_id(user_id)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
         data = json.loads(raw)
@@ -499,18 +531,6 @@ async def media_stream_nvidia(websocket: WebSocket):
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
             data = json.loads(raw)
         stream_sid = data["start"]["streamSid"]
-        call_sid = data["start"].get("callSid", "")
-        # Resolve user_id from callSid or fall back to "demo"
-        user_id = data["start"].get("customParameters", {}).get("user_id", "demo")
-        try:
-            user_id = _validate_user_id(user_id)
-        except HTTPException:
-            await websocket.close(code=1008)
-            return
-        from pipecat.serializers.twilio import TwilioFrameSerializer
-        from pipecat.transports.websocket.fastapi import (
-            FastAPIWebsocketTransport, FastAPIWebsocketParams,
-        )
         serializer = TwilioFrameSerializer(stream_sid=stream_sid)
         transport = FastAPIWebsocketTransport(
             websocket=websocket,
