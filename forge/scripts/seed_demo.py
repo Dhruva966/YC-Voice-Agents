@@ -137,6 +137,7 @@ def _session(persona: str, status: str, score: int, turns_data: list) -> dict:
         "status": status,
         "overall_score": score,
         "duration_seconds": 18 + _stable_mod(sid, 25),
+        "room_url": f"https://forge-demo.daily.co/{sid[:8]}",
         "evaluation": {
             "session_id": sid,
             "provider": "cekura",

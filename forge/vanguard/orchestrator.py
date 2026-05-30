@@ -73,8 +73,14 @@ async def _create_daily_room(session_id: str) -> dict[str, str]:
         }
 
 
-async def _run_one_session(user_id: str, persona_agent_url: str, session: dict[str, Any]) -> dict[str, Any]:
-    daily = await _create_daily_room(session["session_id"])
+async def _run_one_session(
+    user_id: str,
+    persona_agent_url: str,
+    session: dict[str, Any],
+    daily: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if daily is None:
+        daily = await _create_daily_room(session["session_id"])
     async with httpx.AsyncClient(timeout=30) as client:
         join_response = await client.post(
             f"{persona_agent_url.rstrip('/')}/join_room",
@@ -108,6 +114,7 @@ async def _run_one_session(user_id: str, persona_agent_url: str, session: dict[s
     return {
         **session,
         "status": "passed" if evaluation.get("overall_pass") else "failed",
+        "room_url": daily["room_url"],
         "transcript": transcript,
         "evaluation": evaluation,
         "overall_score": evaluation.get("overall_score", 0),
@@ -140,9 +147,23 @@ async def run_vanguard(
 
     async def guarded(session: dict[str, Any]) -> dict[str, Any]:
         async with semaphore:
-            publish_live({**session, "status": "running"})
+            # Create the Daily room first so we can publish the room_url immediately —
+            # this lets the frontend show a clickable "Listen" link while the session is live.
             try:
-                result = await _run_one_session(user_id, persona_agent_url, session)
+                daily = await _create_daily_room(session["session_id"])
+            except Exception as exc:
+                result = {
+                    **session,
+                    "status": "failed",
+                    "error": f"room_creation_failed: {exc}",
+                    "overall_score": 0,
+                    "evaluation": {"overall_pass": False, "overall_score": 0, "failure_annotations": []},
+                }
+                publish_live(result)
+                return result
+            publish_live({**session, "status": "running", "room_url": daily["room_url"]})
+            try:
+                result = await _run_one_session(user_id, persona_agent_url, session, daily=daily)
             except Exception as exc:
                 result = {
                     **session,

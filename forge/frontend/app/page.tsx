@@ -57,6 +57,7 @@ type VanguardSession = {
   status: string;
   overall_score?: number;
   duration_seconds?: number;
+  room_url?: string;
   evaluation?: Evaluation;
   transcript?: { turns?: TranscriptTurn[] };
 };
@@ -1308,18 +1309,39 @@ function VanguardCard({
           minHeight: 152,
         }}
       >
-        {/* Header: persona + status badge */}
+        {/* Header: persona + status badge + listen link */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: "#f4f4f5", lineHeight: 1.3, flex: 1 }}>
             {personaName}
           </span>
-          <span style={{
-            fontSize: 10, fontWeight: 500, padding: "2px 7px", borderRadius: 4, flexShrink: 0,
-            background: isPassed ? "#052e16" : isFailed ? "#1a0505" : isRunning ? "#1c1917" : "#1f1f23",
-            color:      isPassed ? "#22c55e" : isFailed ? "#ef4444" : isRunning ? "#f59e0b" : "#52525b",
-          }}>
-            {status}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+            {session?.room_url && (
+              <a
+                href={session.room_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                title="Open Daily room — join to listen live"
+                style={{
+                  fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 4,
+                  background: isRunning ? "#7c3aed22" : "#1f1f23",
+                  color: isRunning ? "#a78bfa" : "#52525b",
+                  border: `1px solid ${isRunning ? "#7c3aed" : "#27272a"}`,
+                  textDecoration: "none", letterSpacing: "0.04em",
+                  animation: isRunning ? "vg-glow-green 2s ease-in-out infinite" : "none",
+                }}
+              >
+                ▶ LISTEN
+              </a>
+            )}
+            <span style={{
+              fontSize: 10, fontWeight: 500, padding: "2px 7px", borderRadius: 4,
+              background: isPassed ? "#052e16" : isFailed ? "#1a0505" : isRunning ? "#1c1917" : "#1f1f23",
+              color:      isPassed ? "#22c55e" : isFailed ? "#ef4444" : isRunning ? "#f59e0b" : "#52525b",
+            }}>
+              {status}
+            </span>
+          </div>
         </div>
 
         {/* Waveforms or placeholder dots */}
