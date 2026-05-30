@@ -345,80 +345,80 @@ async def media_stream(websocket: WebSocket):
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
             data = json.loads(raw)
         stream_sid = data["start"]["streamSid"]
-    serializer = TwilioFrameSerializer(stream_sid=stream_sid)
-    transport = FastAPIWebsocketTransport(
-        websocket=websocket,
-        params=FastAPIWebsocketParams(
-            serializer=serializer,
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),
-        ),
-    )
+        serializer = TwilioFrameSerializer(stream_sid=stream_sid)
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                serializer=serializer,
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                vad_analyzer=SileroVADAnalyzer(),
+            ),
+        )
 
-    spec = load_personality_spec("demo", _s3_client(), _bucket())
-    initial_system_prompt = persona_system("demo", spec, [])
+        spec = load_personality_spec("demo", _s3_client(), _bucket())
+        initial_system_prompt = persona_system("demo", spec, [])
 
-    llm = GeminiLiveLLMService(
-        api_key=os.getenv("GEMINI_API_KEY"),
-        settings=GeminiLiveLLMService.Settings(
-            model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
-            voice=os.getenv("GEMINI_VOICE", "Puck"),
-            system_instruction=initial_system_prompt,
-        ),
-    )
+        llm = GeminiLiveLLMService(
+            api_key=os.getenv("GEMINI_API_KEY"),
+            settings=GeminiLiveLLMService.Settings(
+                model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+                voice=os.getenv("GEMINI_VOICE", "Puck"),
+                system_instruction=initial_system_prompt,
+            ),
+        )
 
-    context = DynamicPersonaContext(initial_system_prompt)
+        context = DynamicPersonaContext(initial_system_prompt)
 
-    class _TwilioDynamicUpdater(FrameProcessor):
-        def __init__(self, personality_spec):
-            super().__init__()
-            self._personality_spec = personality_spec
+        class _TwilioDynamicUpdater(FrameProcessor):
+            def __init__(self, personality_spec):
+                super().__init__()
+                self._personality_spec = personality_spec
 
-        async def process_frame(self, frame, direction: FrameDirection):
-            await super().process_frame(frame, direction)
-            if not isinstance(frame, LLMContextFrame):
+            async def process_frame(self, frame, direction: FrameDirection):
+                await super().process_frame(frame, direction)
+                if not isinstance(frame, LLMContextFrame):
+                    await self.push_frame(frame, direction)
+                    return
+                messages = [
+                    {"role": m.get("role", ""), "content": m.get("content", "")}
+                    for m in frame.context.get_messages()
+                    if isinstance(m, dict) and m.get("role") in {"user", "assistant"}
+                ]
+                latest_idx = next(
+                    (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"),
+                    None,
+                )
+                utterance = messages[latest_idx]["content"] if latest_idx is not None else ""
+                history = messages[:latest_idx] if latest_idx is not None else messages
+                try:
+                    query = await asyncio.to_thread(rewrite_rag_query, history, utterance)
+                    chunks = await asyncio.to_thread(retrieve, "demo", query, 5)
+                    prompt = persona_system("demo", self._personality_spec, chunks)
+                except Exception:
+                    prompt = initial_system_prompt
+                await self.push_frame(
+                    LLMUpdateSettingsFrame(
+                        delta=LLMSettings(system_instruction=prompt),
+                        service=llm,
+                    ),
+                    direction,
+                )
                 await self.push_frame(frame, direction)
-                return
-            messages = [
-                {"role": m.get("role", ""), "content": m.get("content", "")}
-                for m in frame.context.get_messages()
-                if isinstance(m, dict) and m.get("role") in {"user", "assistant"}
-            ]
-            latest_idx = next(
-                (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"),
-                None,
-            )
-            utterance = messages[latest_idx]["content"] if latest_idx is not None else ""
-            history = messages[:latest_idx] if latest_idx is not None else messages
-            try:
-                query = await asyncio.to_thread(rewrite_rag_query, history, utterance)
-                chunks = await asyncio.to_thread(retrieve, "demo", query, 5)
-                prompt = persona_system("demo", self._personality_spec, chunks)
-            except Exception:
-                prompt = initial_system_prompt
-            await self.push_frame(
-                LLMUpdateSettingsFrame(
-                    delta=LLMSettings(system_instruction=prompt),
-                    service=llm,
-                ),
-                direction,
-            )
-            await self.push_frame(frame, direction)
 
-    pipeline = Pipeline([
-        transport.input(),
-        context.user(),
-        _TwilioDynamicUpdater(spec),
-        llm,
-        transport.output(),
-        context.assistant(),
-    ])
-    task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
+        pipeline = Pipeline([
+            transport.input(),
+            context.user(),
+            _TwilioDynamicUpdater(spec),
+            llm,
+            transport.output(),
+            context.assistant(),
+        ])
+        task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
 
-    @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport, client):
-        await task.cancel()
+        @transport.event_handler("on_client_disconnected")
+        async def on_client_disconnected(transport, client):
+            await task.cancel()
 
         runner = PipelineRunner(handle_sigint=False)
         await runner.run(task)
