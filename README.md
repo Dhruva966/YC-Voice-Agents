@@ -174,8 +174,6 @@ ngrok http 8000
 | `TWILIO_ACCOUNT_SID` | [console.twilio.com](https://console.twilio.com) → Account Info |
 | `TWILIO_AUTH_TOKEN` | Twilio Console → Account Info |
 | `TWILIO_PHONE_NUMBER` | E.164 format, e.g. `+14155551234` |
-| `CEKURA_API_KEY` | Cekura dashboard |
-| `CEKURA_BASE_URL` | Cekura endpoint URL |
 
 ### Local dev defaults (leave as-is for hackathon)
 
@@ -197,6 +195,8 @@ ngrok http 8000
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs to NVIDIA |
 | `NVIDIA_PERSONA_MODEL` | After fine-tune completes: swap in the adapter ID |
 | `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override when running behind TLS/proxy |
+| `CEKURA_API_KEY` | Cekura evaluator; NVIDIA NIM fallback is used when unset |
+| `CEKURA_BASE_URL` | Cekura endpoint URL; optional with NVIDIA NIM fallback |
 | `ELEVENLABS_API_KEY` | Legacy voice clone helper only; not needed for current runtime |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |
@@ -232,10 +232,10 @@ curl -X POST http://localhost:8000/users/demo/ingest \
 
 | Method | Path | What it does |
 |--------|------|-------------|
-| `POST` | `/users/{id}/build` | Trigger full build: score → personality → RAG → fine-tune |
+| `POST` | `/users/{id}/build` | Trigger full build: personality → voice config → score → RAG → fine-tune |
 | `GET` | `/users/{id}/build/status` | Poll build progress |
 
-Build stages (in current code order): **Extract Personality → Legacy Voice Clone (if isolated audio exists) → Score Transcripts → Build RAG → Fine-tune**
+Build stages (in current code order): **Extract Personality → Configure Gemini Voice (optional legacy clone if `ELEVENLABS_API_KEY` is set) → Score Transcripts → Build RAG → Fine-tune**
 
 Returns `{"status": "none"}` before the first build runs.
 

@@ -15,7 +15,7 @@ const inter = Inter({ subsets: ["latin"] });
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 const USER_ID = "demo";
 
-const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Score Transcripts", "Clone Voice", "Build RAG", "Fine-tune"];
+const BUILD_STEPS = ["Ingest", "Transcribe", "Extract Personality", "Score Transcripts", "Configure Voice", "Build RAG", "Fine-tune"];
 
 const PERSONA_NAMES: Record<string, string> = {
   social_engineer: "Social Engineer",
@@ -88,6 +88,8 @@ type Dashboard = {
   attack_suite_history?: Array<{ cycle: number; size: number }>;
   attack_suite_size?: number;
   voice_id?: string | null;
+  gemini_voice?: string | null;
+  attacker_gemini_voice?: string | null;
   adapter_id?: string | null;
   personality_spec?: Record<string, unknown> | null;
   pass_rate_by_persona?: Record<string, { runs: number; passed: number; pass_rate: number }>;
@@ -228,7 +230,7 @@ export default function Page() {
 
   const statusItems = useMemo(() => [
     { key: "personality_spec_ready", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
-    { key: "voice_clone_ready", label: "Voice Clone", ready: statusInfo?.voice_clone_ready || false },
+    { key: "voice_clone_ready", label: "Voice Ready", ready: statusInfo?.voice_clone_ready || false },
     { key: "rag_ready", label: "RAG", ready: statusInfo?.rag_ready || false },
     { key: "finetune", label: "Fine-tune", ready: isFineTuneReady },
     { key: "vanguard", label: "Vanguard", ready: (statusInfo?.vanguard_runs || 0) > 0 },
@@ -258,9 +260,19 @@ export default function Page() {
     }
   }
 
+  async function fetchTranscriptScores() {
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/transcript_scores`);
+      if (res.ok) setTranscriptScores(await res.json());
+    } catch {
+      // silent fail
+    }
+  }
+
   useEffect(() => {
     fetchStatus();
     refreshDashboard();
+    fetchTranscriptScores();
     const statusTimer = setInterval(fetchStatus, 30000);
     const dashTimer = setInterval(refreshDashboard, 15000);
     return () => { clearInterval(statusTimer); clearInterval(dashTimer); };
@@ -276,7 +288,7 @@ export default function Page() {
         const nextSteps = new Set(completedSteps);
         if (status.stage.includes("personality")) nextSteps.add("Extract Personality");
         if (status.stage.includes("scoring") || status.stage.includes("rag") || status.stage.includes("fine") || status.status === "completed") nextSteps.add("Score Transcripts");
-        if (status.stage.includes("voice")) nextSteps.add("Clone Voice");
+        if (status.stage.includes("voice")) nextSteps.add("Configure Voice");
         if (status.stage.includes("rag")) nextSteps.add("Build RAG");
         if (status.stage.includes("fine")) nextSteps.add("Fine-tune");
         if (status.status === "completed") BUILD_STEPS.forEach((s) => nextSteps.add(s));
@@ -287,7 +299,7 @@ export default function Page() {
           refreshDashboard();
           fetchStatus();
           if (status.status === "completed") {
-            fetch(`${API_BASE}/users/${USER_ID}/transcript_scores`).then(r => r.ok ? r.json() : null).then(d => { if (d) setTranscriptScores(d); }).catch(() => {});
+            fetchTranscriptScores();
           }
         }
       } catch {
@@ -721,16 +733,16 @@ export default function Page() {
                 </div>
               </div>
               <div style={{ background: "#141416", border: "1px solid #1f1f23", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 8 }}>Voice Clone</div>
+                <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 8 }}>Gemini Voice</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
                   <div style={{ color: "#71717a" }}>
-                    Voice ID: <span style={{ color: "#f4f4f5", fontFamily: "monospace", fontSize: 11 }}>
-                      {dashboard.voice_id ? dashboard.voice_id.slice(0, 16) + "..." : "—"}
+                    Voice: <span style={{ color: "#f4f4f5", fontFamily: "monospace", fontSize: 11 }}>
+                      {dashboard.gemini_voice || "Puck"}
                     </span>
                   </div>
                   <div style={{ color: "#71717a" }}>
-                    Similarity: <span style={{ color: "#22c55e" }}>0.82</span>
-                    <span style={{ color: "#52525b", marginLeft: 4 }}>(stub)</span>
+                    Runtime: <span style={{ color: "#22c55e" }}>Gemini Live</span>
+                    {dashboard.voice_id && <span style={{ color: "#52525b", marginLeft: 4 }}>(legacy clone available)</span>}
                   </div>
                 </div>
               </div>

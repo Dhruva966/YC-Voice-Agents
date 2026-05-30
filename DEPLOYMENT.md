@@ -6,7 +6,7 @@
 cd forge
 cp .env.example .env
 # Fill: GEMINI_API_KEY, NVIDIA_API_KEY + NVIDIA_BASE_URL + NVIDIA_BASE_MODEL,
-#       DAILY_API_KEY, TWILIO_*, CEKURA_API_KEY + CEKURA_BASE_URL
+#       DAILY_API_KEY, TWILIO_*
 # Leave USE_LOCAL_STORAGE=true, USE_LOCAL_RAG=true
 
 python3 -m pip install -r requirements.txt
@@ -40,8 +40,6 @@ ngrok http 8000
 | `TWILIO_ACCOUNT_SID` | console.twilio.com → Account Info |
 | `TWILIO_AUTH_TOKEN` | console.twilio.com → Account Info |
 | `TWILIO_PHONE_NUMBER` | E.164 format, e.g. `+14155551234` |
-| `CEKURA_API_KEY` | Cekura dashboard |
-| `CEKURA_BASE_URL` | Cekura endpoint URL |
 
 ### Local dev defaults (leave as-is for hackathon)
 | Variable | Default | Effect |
@@ -61,6 +59,8 @@ ngrok http 8000
 | `NVIDIA_CUSTOMIZATION_BASE_URL` | Submitting LoRA fine-tune jobs |
 | `NVIDIA_PERSONA_MODEL` | After fine-tune: adapter ID to swap in |
 | `TWILIO_STREAM_URL` | Explicit `wss://.../media-stream` override behind TLS/proxy |
+| `CEKURA_API_KEY` | Cekura evaluator; NVIDIA NIM fallback is used when unset |
+| `CEKURA_BASE_URL` | Cekura endpoint URL; optional with NVIDIA NIM fallback |
 | `ELEVENLABS_API_KEY` | Legacy voice clone helper only; not needed for current runtime |
 | `AWS_S3_BUCKET` | When `USE_LOCAL_STORAGE=false` |
 | `AWS_ACCESS_KEY_ID` | When `USE_LOCAL_STORAGE=false` |

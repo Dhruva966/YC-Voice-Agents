@@ -199,8 +199,8 @@ Treat this as a workflow map. Use slash commands only in tools that support them
 | `TWILIO_ACCOUNT_SID` | ✅ | Twilio telephony |
 | `TWILIO_AUTH_TOKEN` | ✅ | Twilio auth |
 | `TWILIO_PHONE_NUMBER` | ✅ | Inbound phone number |
-| `CEKURA_API_KEY` | ✅ | Transcript evaluation |
-| `CEKURA_BASE_URL` | ✅ | Cekura endpoint URL |
+| `CEKURA_API_KEY` | optional | Cekura evaluation; NVIDIA NIM fallback when unset |
+| `CEKURA_BASE_URL` | optional | Cekura endpoint URL |
 | `USE_LOCAL_STORAGE` | optional | `true` (default) → `./local_data/`; `false` → AWS S3 |
 | `USE_LOCAL_RAG` | optional | `true` (default) → ChromaDB; `false` → pgvector/RDS |
 | `TRANSCRIPT_SCORE_TOP_K` | optional | Top segments per scoring dimension (default: `50`) |

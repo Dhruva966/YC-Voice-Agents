@@ -75,6 +75,7 @@ async def _run_one_session(user_id: str, persona_agent_url: str, session: dict[s
         session["attack_persona"],
         daily["room_url"],
         daily["attacker_token"],
+        system_prompt=session.get("system_prompt"),
     )
     evaluation = await evaluate_transcript(
         session["session_id"],

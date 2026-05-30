@@ -31,6 +31,7 @@ def run_attacker_bot(
     daily_token: str,
     max_turns: int = 15,
     transcript_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     try:
         from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -47,8 +48,9 @@ def run_attacker_bot(
             "Pipecat with Gemini Live is not installed. Run: pip install pipecat-ai[google,daily]"
         ) from exc
 
-    if attack_persona not in ATTACKER_PERSONAS:
+    if attack_persona not in ATTACKER_PERSONAS and not system_prompt:
         raise KeyError(f"Unknown attack persona: {attack_persona}")
+    attacker_prompt = system_prompt or ATTACKER_PERSONAS[attack_persona]
 
     transcript: dict[str, Any] = {
         "session_id": session_id,
@@ -81,7 +83,7 @@ def run_attacker_bot(
         settings=GeminiLiveLLMService.Settings(
             model=gemini_model,
             voice=attacker_voice,
-            system_instruction=ATTACKER_PERSONAS[attack_persona],
+            system_instruction=attacker_prompt,
         ),
     )
 

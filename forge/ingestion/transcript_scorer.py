@@ -27,6 +27,8 @@ from storage import s3_client as _s3_client, bucket_name as _bucket
 LOGGER = logging.getLogger(__name__)
 
 _DIMENSIONS = ["empathy", "objection_handling", "naturalness", "conversational_flow", "closing_technique"]
+_CALLER_LABELS = {"caller", "customer", "user", "prospect", "buyer", "client"}
+_AGENT_LABELS = {"agent", "assistant", "rep", "sales", "sales_rep", "seller"}
 
 
 def _nim_client() -> OpenAI:
@@ -38,6 +40,19 @@ def _nim_client() -> OpenAI:
 
 def _nim_model() -> str:
     return os.getenv("NVIDIA_BASE_MODEL") or "meta/llama-4-maverick-17b-128e-instruct"
+
+
+def _role_from_label(label: str, generic_roles: dict[str, str]) -> str | None:
+    normalized = label.strip().lower().replace(" ", "_")
+    if normalized in _CALLER_LABELS:
+        return "caller"
+    if normalized in _AGENT_LABELS:
+        return "agent"
+    if normalized.startswith(("speaker", "participant")):
+        if normalized not in generic_roles:
+            generic_roles[normalized] = "caller" if "caller" not in generic_roles.values() else "agent"
+        return generic_roles[normalized]
+    return None
 
 
 @dataclass
@@ -82,15 +97,19 @@ def _parse_turns(transcript: dict[str, Any], source_file: str) -> list[ScoredTur
     turns_raw = transcript.get("turns") or transcript.get("segments") or []
     paired: list[ScoredTurn] = []
 
-    if turns_raw and isinstance(turns_raw[0], dict) and "role" in turns_raw[0]:
-        # Standard format: [{role: caller|agent, text: ...}]
+    if turns_raw and isinstance(turns_raw[0], dict):
+        # Standard format: [{role: caller|agent, text: ...}] plus speaker-labelled variants.
         caller_buf = ""
+        generic_roles: dict[str, str] = {}
         for i, turn in enumerate(turns_raw):
-            role = (turn.get("role") or "").lower()
+            role = _role_from_label(
+                str(turn.get("role") or turn.get("speaker") or turn.get("speaker_label") or turn.get("participant") or ""),
+                generic_roles,
+            )
             text = (turn.get("text") or turn.get("content") or "").strip()
-            if role in {"caller", "user"} and text:
+            if role == "caller" and text:
                 caller_buf = text
-            elif role in {"agent", "assistant"} and text and caller_buf:
+            elif role == "agent" and text and caller_buf:
                 paired.append(ScoredTurn(
                     caller=caller_buf,
                     agent=text,
@@ -98,26 +117,31 @@ def _parse_turns(transcript: dict[str, Any], source_file: str) -> list[ScoredTur
                     turn_index=i,
                 ))
                 caller_buf = ""
-        return paired
+        if paired:
+            return paired
 
     # Plain text: parse CALLER:/AGENT: lines
     raw_text = transcript.get("text") or json.dumps(transcript, ensure_ascii=True)
     lines = raw_text.splitlines()
     caller_buf = ""
+    generic_roles: dict[str, str] = {}
     for i, line in enumerate(lines):
         line = line.strip()
-        if re.match(r"^(CALLER|CUSTOMER|USER)\s*:", line, re.I):
-            caller_buf = re.sub(r"^[^:]+:\s*", "", line).strip()
-        elif re.match(r"^(AGENT|ASSISTANT|REP|SALES)\s*:", line, re.I) and caller_buf:
-            agent_text = re.sub(r"^[^:]+:\s*", "", line).strip()
-            if agent_text:
-                paired.append(ScoredTurn(
-                    caller=caller_buf,
-                    agent=agent_text,
-                    source_file=source_file,
-                    turn_index=i,
-                ))
-                caller_buf = ""
+        match = re.match(r"^([A-Za-z][A-Za-z0-9 _.-]{0,40})\s*:\s*(.+)$", line)
+        if not match:
+            continue
+        role = _role_from_label(match.group(1), generic_roles)
+        text = match.group(2).strip()
+        if role == "caller" and text:
+            caller_buf = text
+        elif role == "agent" and text and caller_buf:
+            paired.append(ScoredTurn(
+                caller=caller_buf,
+                agent=text,
+                source_file=source_file,
+                turn_index=i,
+            ))
+            caller_buf = ""
 
     return paired
 
@@ -170,8 +194,10 @@ def score_transcripts(
     all_turns: list[ScoredTurn] = []
 
     for idx, transcript in enumerate(transcripts):
-        source = (source_filenames[idx] if source_filenames and idx < len(source_filenames)
-                  else f"transcript_{idx}")
+        source = (
+            source_filenames[idx] if source_filenames and idx < len(source_filenames)
+            else transcript.get("source_file") or f"transcript_{idx}"
+        )
         turns = _parse_turns(transcript, source)
 
         if not turns:

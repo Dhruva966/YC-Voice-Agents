@@ -218,8 +218,13 @@ def _run_build(user_id: str, job_id: str) -> None:
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "cloning_voice", "status": "running"})
         isolated_keys = [key for key in _list_keys(f"{user_id}/isolated_audio/") if key.endswith(".wav")]
-        if isolated_keys:
-            create_voice_clone(user_id, user_id, isolated_keys)
+        if isolated_keys and os.getenv("ELEVENLABS_API_KEY"):
+            try:
+                create_voice_clone(user_id, user_id, isolated_keys)
+            except Exception:
+                LOGGER.exception("legacy_voice_clone_failed_continuing_with_gemini_voice")
+        elif isolated_keys:
+            LOGGER.info("legacy_voice_clone_skipped_no_elevenlabs_key user_id=%s", user_id)
 
         _put_status(user_id, job_id, {"job_id": job_id, "stage": "scoring_transcripts", "status": "running"})
         scored = score_transcripts(user_id, transcripts)
@@ -522,6 +527,8 @@ async def dashboard(user_id: str) -> dict[str, Any]:
     return {
         "personality_spec": personality_spec,
         "voice_id": voice_id,
+        "gemini_voice": os.getenv("GEMINI_VOICE", "Puck"),
+        "attacker_gemini_voice": os.getenv("ATTACKER_GEMINI_VOICE", "Charon"),
         "adapter_id": adapter_id,
         "latest_vanguard_run_summary": latest,
         "pass_rate_history": [
@@ -552,9 +559,9 @@ async def get_user_status(user_id: str):
     spec_path = local_data / "personality" / "personality_spec.json"
     personality_spec_ready = spec_path.exists()
 
-    # voice_clone_ready
+    # Gemini Live is the runtime voice path; ElevenLabs voice_id.txt is legacy/optional.
     voice_path = local_data / "voice_id.txt"
-    voice_clone_ready = voice_path.exists()
+    voice_clone_ready = voice_path.exists() or bool(os.getenv("GEMINI_API_KEY"))
 
     # rag_ready - check ChromaDB collection
     rag_ready = False

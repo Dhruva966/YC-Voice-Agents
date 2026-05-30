@@ -6,6 +6,7 @@ import asyncio
 import json
 import mimetypes
 import os
+import re
 import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -44,6 +45,38 @@ def _put_json(s3_client, bucket: str, key: str, payload: dict[str, Any]) -> None
 
 def _put_text(s3_client, bucket: str, key: str, text: str) -> None:
     s3_client.put_object(Bucket=bucket, Key=key, Body=text.encode("utf-8"), ContentType="text/plain")
+
+
+def _looks_like_call_transcript(text: str) -> bool:
+    labels = [
+        match.group(1).strip().lower().replace(" ", "_")
+        for match in re.finditer(r"(?mi)^\s*([a-z][a-z0-9 _.-]{0,40})\s*:\s*\S", text)
+    ]
+    if len(labels) < 2:
+        return False
+
+    caller_labels = {"caller", "customer", "user", "prospect", "buyer", "client"}
+    agent_labels = {"agent", "assistant", "rep", "sales", "sales_rep", "seller"}
+    has_caller = any(label in caller_labels for label in labels)
+    has_agent = any(label in agent_labels for label in labels)
+    generic_speakers = {label for label in labels if label.startswith(("speaker", "participant"))}
+    return (has_caller and has_agent) or len(generic_speakers) >= 2
+
+
+def _transcript_payload(path: Path, cleaned: str, filename: str) -> dict[str, Any] | None:
+    if path.suffix.lower() == ".json":
+        try:
+            data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            data = None
+        if isinstance(data, dict) and any(key in data for key in ("turns", "segments", "text")):
+            return {**data, "source_file": filename}
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return {"source_file": filename, "turns": data}
+
+    if _looks_like_call_transcript(cleaned):
+        return {"source_file": filename, "text": cleaned}
+    return None
 
 
 async def ingest_file(user_id: str, file_path: str, original_filename: str | None = None) -> dict[str, Any]:
@@ -104,6 +137,11 @@ async def ingest_file(user_id: str, file_path: str, original_filename: str | Non
             corpus_key = f"{user_id}/corpus/{job_id}.txt"
             _put_text(s3, bucket, corpus_key, cleaned)
             result["s3_corpus_path"] = corpus_key
+            transcript = _transcript_payload(path, cleaned, filename)
+            if transcript:
+                transcript_key = f"{user_id}/transcripts/{job_id}.json"
+                _put_json(s3, bucket, transcript_key, transcript)
+                result["s3_transcript_path"] = transcript_key
 
         elif suffix in PDF_EXTENSIONS:
             result["input_type"] = "pdf"
