@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hmac
 import json
 import logging
 import os
@@ -11,8 +12,10 @@ import re
 import tempfile
 import time
 import uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock, Thread
 from typing import Any
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -24,7 +27,7 @@ from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from twilio.request_validator import RequestValidator as _TwilioRequestValidator
 from twilio.twiml.voice_response import VoiceResponse
@@ -75,6 +78,30 @@ _vanguard_live: dict[str, list[dict[str, Any]]] = {}
 _vanguard_live_totals: dict[str, int] = {}
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
+# Rate limiting: sliding window per (bucket, key)
+_rate_lock = Lock()
+_rate_buckets: dict[str, list[float]] = defaultdict(list)
+# (max_calls, window_seconds)
+_RATE_LIMITS: dict[str, tuple[int, int]] = {
+    "build": (3, 60),
+    "vanguard": (3, 60),
+    "chat": (10, 60),
+}
+
+
+def _rate_limit(bucket: str, key: str) -> None:
+    max_calls, window = _RATE_LIMITS[bucket]
+    full_key = f"{bucket}:{key}"
+    now = time.time()
+    with _rate_lock:
+        _rate_buckets[full_key] = [t for t in _rate_buckets[full_key] if t > now - window]
+        if len(_rate_buckets[full_key]) >= max_calls:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit: max {max_calls} requests per {window}s",
+            )
+        _rate_buckets[full_key].append(now)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -98,6 +125,21 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "X-API-Key", "X-Twilio-Signature", "Authorization"],
 )
+
+_API_KEY_EXEMPT = frozenset({"/health", "/docs", "/redoc", "/openapi.json", "/media-stream"})
+
+
+@app.middleware("http")
+async def _api_key_middleware(request: Request, call_next):
+    forge_key = os.getenv("FORGE_API_KEY")
+    if forge_key and request.method != "OPTIONS":
+        path = request.url.path
+        exempt = path in _API_KEY_EXEMPT or path.endswith("/webhook/twilio/inbound")
+        if not exempt:
+            provided = request.headers.get("X-API-Key", "")
+            if not hmac.compare_digest(provided.encode("utf-8"), forge_key.encode("utf-8")):
+                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -353,6 +395,7 @@ def _run_build(user_id: str, job_id: str) -> None:
 @app.post("/users/{user_id}/build", response_model=QueuedResponse)
 async def build(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
     user_id = _validate_user_id(user_id)
+    _rate_limit("build", user_id)
     job_id = str(uuid.uuid4())
     _put_status(user_id, job_id, {"job_id": job_id, "stage": "queued", "status": "queued"})
     background_tasks.add_task(_run_build, user_id, job_id)
@@ -403,15 +446,14 @@ async def call_agent(user_id: str, background_tasks: BackgroundTasks) -> CallRes
 async def _twilio_inbound_response(request: Request, user_id: str) -> Response:
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     if not auth_token:
-        LOGGER.warning("SECURITY: TWILIO_AUTH_TOKEN not set — webhook requests are NOT authenticated")
-    if auth_token:
-        validator = _TwilioRequestValidator(auth_token)
-        signature = request.headers.get("X-Twilio-Signature", "")
-        url = str(request.url)
-        form_data = dict(await request.form())
-        if not validator.validate(url, form_data, signature):
-            LOGGER.warning("twilio_signature_validation_failed url=%s", url)
-            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+        raise HTTPException(status_code=503, detail="TWILIO_AUTH_TOKEN not configured")
+    validator = _TwilioRequestValidator(auth_token)
+    signature = request.headers.get("X-Twilio-Signature", "")
+    url = str(request.url)
+    form_data = dict(await request.form())
+    if not validator.validate(url, form_data, signature):
+        LOGGER.warning("twilio_signature_validation_failed url=%s", url)
+        raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     twiml = VoiceResponse()
     connect = twiml.connect()
     connect.stream(url=_twilio_stream_url(request, user_id))
@@ -434,7 +476,11 @@ async def twilio_inbound_for_user(user_id: str, request: Request) -> Response:
 async def media_stream(websocket: WebSocket):
     await websocket.accept()
     try:
-        user_id = _validate_user_id(websocket.query_params.get("user_id", "demo"))
+        raw_user_id = websocket.query_params.get("user_id", "")
+        if not raw_user_id:
+            LOGGER.warning("media_stream_no_user_id_param — falling back to 'demo'")
+            raw_user_id = "demo"
+        user_id = _validate_user_id(raw_user_id)
     except HTTPException:
         await websocket.close(code=1008)
         return
@@ -554,12 +600,13 @@ def _run_vanguard_background(user_id: str, run_id: str) -> None:
         time.sleep(300)
         _vanguard_live.pop(run_id, None)
         _vanguard_live_totals.pop(run_id, None)
-    threading.Thread(target=_cleanup, daemon=True).start()
+    Thread(target=_cleanup, daemon=True).start()
 
 
 @app.post("/users/{user_id}/vanguard/run", response_model=QueuedResponse)
 async def vanguard_run(user_id: str, background_tasks: BackgroundTasks) -> QueuedResponse:
     user_id = _validate_user_id(user_id)
+    _rate_limit("vanguard", user_id)
     _require_built_user(user_id)
     run_id = str(uuid.uuid4())
     background_tasks.add_task(_run_vanguard_background, user_id, run_id)
@@ -777,6 +824,7 @@ async def transcript_scores(user_id: str) -> dict[str, Any]:
 @app.post("/chat")
 async def chat(req: ChatRequest):
     user_id = _validate_user_id(req.user_id)
+    _rate_limit("chat", user_id)
     start = time.time()
     system_prompt = await asyncio.to_thread(build_dynamic_system_prompt, user_id, user_id, [], req.message)
     client = openai.AsyncOpenAI(
