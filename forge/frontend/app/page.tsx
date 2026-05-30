@@ -117,7 +117,7 @@ type VanguardRun = {
   pass_rate: number; sessions?: VanguardSession[];
 };
 type SystemStatus = {
-  personality_spec_ready: boolean; voice_clone_ready: boolean; rag_ready: boolean;
+  personality_spec_ready: boolean; instant_spec_ready: boolean; voice_clone_ready: boolean; rag_ready: boolean;
   vanguard_runs: number; improvement_cycles: number; attack_suite_size: number;
 };
 type PassRateHistoryItem = { cycle: number; pass_rate: number; regression_passed?: boolean };
@@ -570,16 +570,9 @@ function VanguardGrid({
         slots.push({ key: s.session_id, personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona, session: s });
     });
   } else {
-    const liveSlots: Slot[] = sessions.map((s) => ({
+    slots = sessions.map((s) => ({
       key: s.session_id, personaName: PERSONA_NAMES[s.attack_persona] || s.attack_persona, session: s,
     }));
-    const ph = Math.max(0, expectedTotal - liveSlots.length);
-    slots = [
-      ...liveSlots,
-      ...Array.from({ length: ph }, (_, i) => ({
-        key: `placeholder-${i}`, personaName: `Room ${liveSlots.length + i + 1}`, session: null,
-      })),
-    ];
   }
 
   return (
@@ -603,6 +596,8 @@ function VanguardGrid({
 export default function Page() {
   const [activeSection,       setActiveSection]       = useState("build");
   const [files,               setFiles]               = useState<File[]>([]);
+  const [ingestMode,          setIngestMode]          = useState<"files" | "text">("files");
+  const [rawTranscriptText,   setRawTranscriptText]   = useState("");
   const [isDragging,          setIsDragging]          = useState(false);
   const [completedSteps,      setCompletedSteps]      = useState<string[]>([]);
   const [buildJobId,          setBuildJobId]          = useState<string | null>(null);
@@ -629,6 +624,7 @@ export default function Page() {
   const [autoLoopCycle,       setAutoLoopCycle]       = useState(0);
   const [autoLoopRunning,     setAutoLoopRunning]     = useState(false);
   const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
+  const [agentMode,           setAgentMode]           = useState<"zero_shot" | "instant" | "robust">("robust");
 
   const improvePollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const improveStartCount = useRef(0);
@@ -636,6 +632,13 @@ export default function Page() {
   const autoLoopCycleRef  = useRef(0);
 
   /* ── Derived ─────────────────────────────────────────── */
+  const modeReady = useMemo(() => {
+    if (agentMode === "zero_shot") return true;
+    if (agentMode === "instant") return !!statusInfo?.instant_spec_ready;
+    if (agentMode === "robust") return !!statusInfo?.personality_spec_ready;
+    return false;
+  }, [agentMode, statusInfo]);
+
   const chartData = useMemo(() => {
     const passRates = dashboard.pass_rate_history || [];
     const sizes     = dashboard.attack_suite_history || [];
@@ -693,6 +696,8 @@ export default function Page() {
   const buildComplete   = buildStage === "submitted" || completedSteps.length >= BUILD_STEPS.length || !!dashboard.personality_spec;
   const personalitySpec = dashboard.personality_spec as Record<string, unknown> | null | undefined;
   const sessions        = activeRun?.sessions || [];
+  const hasBuildInput   = ingestMode === "files" ? files.length > 0 : rawTranscriptText.trim().length > 0;
+  const transcriptHighlights = transcriptScores?.top_k_turns?.slice(0, 3) || [];
 
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
@@ -741,7 +746,10 @@ export default function Page() {
   async function uploadAndBuild() {
     setBusy("build"); setCompletedSteps([]); setError(null);
     try {
-      for (const file of files) {
+      const uploads = ingestMode === "text"
+        ? [new File([rawTranscriptText], "pasted_transcript.txt", { type: "text/plain" })]
+        : files;
+      for (const file of uploads) {
         const body = new FormData();
         body.append("file", file);
         const res = await fetch(`${API_BASE}/users/${USER_ID}/ingest`, withApiKey({ method: "POST", body }));
@@ -750,18 +758,20 @@ export default function Page() {
       setCompletedSteps(["Ingest", "Transcribe"]);
       const res = await fetch(`${API_BASE}/users/${USER_ID}/build`, withApiKey({ method: "POST" }));
       setBuildJobId((await res.json()).job_id);
+      setFiles([]);
+      if (ingestMode === "text") setRawTranscriptText("");
     } catch (e) { setError(String(e)); } finally { setBusy(null); }
   }
   async function callAgent() {
     setBusy("call"); setError(null);
-    if (!agentReady) {
+    if (!modeReady) {
       setBusy(null);
-      setError("Build must complete before starting the live demo call.");
+      setError(`The selected agent mode (${agentMode}) is not ready yet.`);
       return;
     }
     const roomWindow = window.open("", "_blank", "noopener,noreferrer");
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/call`, withApiKey({ method: "POST" }));
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/call?mode=${agentMode}`, withApiKey({ method: "POST" }));
       if (!res.ok) throw new Error("Call agent failed");
       const payload = await res.json();
       setCallInfo(payload);
@@ -824,7 +834,7 @@ export default function Page() {
       const res = await fetch(`${API_BASE}/chat`, withApiKey({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatMessage, user_id: USER_ID }),
+        body: JSON.stringify({ message: chatMessage, user_id: USER_ID, mode: agentMode }),
       }));
       if (!res.ok) throw new Error("Chat request failed");
       const data = await res.json();
@@ -1099,12 +1109,12 @@ export default function Page() {
               </div>
               <div>
                 <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2, letterSpacing: "-0.01em" }}>Build</h2>
-                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Ingest transcripts · extract personality · fine-tune</p>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Ingest transcripts · extract personality · build retrieval · prepare runtime</p>
               </div>
             </div>
             <button
               onClick={uploadAndBuild}
-              disabled={!files.length || busy === "build"}
+              disabled={!hasBuildInput || busy === "build"}
               className="forge-btn-primary"
             >
               {busy === "build" ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
@@ -1112,51 +1122,92 @@ export default function Page() {
             </button>
           </div>
 
-          {/* Drop zone */}
-          <div
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setIsDragging(false); setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files || [])]); }}
-            style={{
-              border: `2px dashed ${isDragging ? "var(--clay)" : "var(--border)"}`,
-              background: isDragging ? "var(--clay-tint)" : "var(--surface-2)",
-              borderRadius: "var(--radius-lg)", minHeight: 136,
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              padding: 24, marginBottom: 20,
-              transition: "all 0.2s",
-              boxShadow: isDragging ? "0 0 0 4px rgba(180,90,53,0.15)" : "none",
-            }}
-          >
-            <label htmlFor="file-input" style={{ cursor: "pointer", width: "100%", textAlign: "center" }}>
-              {files.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
-                  {files.map((file, i) => (
-                    <span key={i} style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      background: "var(--surface)", border: "1px solid var(--border)",
-                      padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--ink)",
-                    }}>
-                      {file.name}
-                      <button
-                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }}
-                        style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex" }}
-                      >
-                        <XCircle size={12} />
-                      </button>
-                    </span>
-                  ))}
-                  <span style={{ fontSize: 12, color: "var(--clay)", fontWeight: 600, cursor: "pointer" }}>+ Add more</span>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <UploadCloud size={28} color="var(--clay)" style={{ marginBottom: 10 }} />
-                  <div style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>or click to browse</div>
-                </div>
-              )}
-            </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <button
+              onClick={() => setIngestMode("files")}
+              className={`forge-btn-secondary ${ingestMode === "files" ? "active" : ""}`}
+            >
+              Upload Files
+            </button>
+            <button
+              onClick={() => setIngestMode("text")}
+              className={`forge-btn-secondary ${ingestMode === "text" ? "active" : ""}`}
+            >
+              Paste Transcript
+            </button>
+            <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+              {ingestMode === "files" ? "Supports text, audio, CSV, JSON, PDF, and DOCX" : "Paste CALLER:/AGENT: transcript text directly"}
+            </span>
           </div>
+
+          {ingestMode === "files" ? (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsDragging(false); setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files || [])]); }}
+              style={{
+                border: `2px dashed ${isDragging ? "var(--clay)" : "var(--border)"}`,
+                background: isDragging ? "var(--clay-tint)" : "var(--surface-2)",
+                borderRadius: "var(--radius-lg)", minHeight: 136,
+                display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center",
+                padding: 24, marginBottom: 20,
+                transition: "all 0.2s",
+                boxShadow: isDragging ? "0 0 0 4px rgba(180,90,53,0.15)" : "none",
+              }}
+            >
+              <label htmlFor="file-input" style={{ cursor: "pointer", width: "100%", textAlign: "center" }}>
+                {files.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center" }}>
+                    {files.map((file, i) => (
+                      <span key={i} style={{
+                        display: "inline-flex", alignItems: "center", gap: 5,
+                        background: "var(--surface)", border: "1px solid var(--border)",
+                        padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--ink)",
+                      }}>
+                        {file.name}
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFile(i); }}
+                          style={{ background: "transparent", border: "none", color: "var(--ink-3)", cursor: "pointer", padding: 0, display: "inline-flex" }}
+                        >
+                          <XCircle size={12} />
+                        </button>
+                      </span>
+                    ))}
+                    <span style={{ fontSize: 12, color: "var(--clay)", fontWeight: 600, cursor: "pointer" }}>+ Add more</span>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                    <UploadCloud size={28} color="var(--clay)" style={{ marginBottom: 10 }} />
+                    <div style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, marginBottom: 4 }}>Drop audio, text, CSV, JSON, EML, PDF, or DOCX</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>or click to browse</div>
+                  </div>
+                )}
+              </label>
+            </div>
+          ) : (
+            <div className="forge-card" style={{ padding: 14, marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 10 }}>Paste call transcripts (CALLER: / AGENT: format)</div>
+              <textarea
+                value={rawTranscriptText}
+                onChange={(e) => setRawTranscriptText(e.target.value)}
+                placeholder={"CALLER: Hi, I’m calling about my loan options.\nAGENT: Absolutely, I can walk you through that."}
+                className="forge-textarea"
+              />
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
+                <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                  {rawTranscriptText.trim() ? `${rawTranscriptText.trim().split(/\s+/).length} words ready for ingest` : "No transcript text pasted yet"}
+                </span>
+                <button
+                  onClick={() => setRawTranscriptText("")}
+                  disabled={!rawTranscriptText}
+                  className="forge-btn-secondary"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
           <input
             id="file-input" className="sr-only" type="file" multiple
             accept="audio/*,.txt,.eml,.json,.csv,.pdf,.docx"
@@ -1230,8 +1281,39 @@ export default function Page() {
             </div>
           )}
 
+          <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 12, marginBottom: 20 }}>
+            <div className="forge-card">
+              <div className="forge-section-label">BUILD STATUS</div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: "var(--ink)", marginBottom: 8 }}>
+                {buildStage ? buildStage.replace(/_/g, " ") : "Not started"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
+                {buildJobId
+                  ? `Job ${buildJobId.slice(0, 8)} is ${buildComplete ? "complete" : "running"}${buildStage ? ` at ${buildStage}.` : "."}`
+                  : "No build has been started yet. Upload files or paste a transcript to generate real artifacts."}
+              </div>
+            </div>
+            <div className="forge-card">
+              <div className="forge-section-label">REAL DATA COVERAGE</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                {[
+                  { label: "Transcript Score", ready: !!transcriptScores },
+                  { label: "Personality Spec", ready: !!personalitySpec },
+                  { label: "Vanguard Results", ready: (statusInfo?.vanguard_runs || 0) > 0 },
+                ].map((item) => (
+                  <div key={item.label} style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 10 }}>
+                    <div style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)", marginBottom: 4 }}>{item.label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: item.ready ? "var(--status-green)" : "var(--ink-3)" }}>
+                      {item.ready ? "Available" : "No real data yet"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* Build results */}
-          {buildComplete && personalitySpec && (
+          {personalitySpec ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
               <div className="forge-card">
                 <div className="forge-section-label">Personality</div>
@@ -1284,10 +1366,17 @@ export default function Page() {
                 </div>
               </div>
             </div>
+          ) : (
+            <div className="forge-card" style={{ marginBottom: 20 }}>
+              <div className="forge-section-label">COMPUTED BUILD ARTIFACTS</div>
+              <div style={{ fontSize: 13, color: "var(--ink-3)", lineHeight: 1.6 }}>
+                No personality, retrieval, or runtime artifacts have been generated yet. This section will populate after a real build completes.
+              </div>
+            </div>
           )}
 
           {/* Transcript quality */}
-          {transcriptScores && (
+          {transcriptScores ? (
             <div className="forge-card">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                 <div className="forge-section-label">TRANSCRIPT QUALITY</div>
@@ -1321,6 +1410,30 @@ export default function Page() {
                   );
                 })}
               </div>
+              {transcriptHighlights.length > 0 && (
+                <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                  {transcriptHighlights.map((turn, index) => (
+                    <div key={`${turn.aggregate}-${index}`} style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 10 }}>
+                      <div style={{ fontSize: 10, color: "var(--clay)", fontFamily: "var(--font-mono)", marginBottom: 6 }}>
+                        Highlight {index + 1} · {Math.round(turn.aggregate * 10)}%
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--ink-2)", lineHeight: 1.5, marginBottom: 6 }}>
+                        <strong>Caller:</strong> {turn.caller}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.5 }}>
+                        <strong>Agent:</strong> {turn.agent}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="forge-card">
+              <div className="forge-section-label">TRANSCRIPT QUALITY</div>
+              <div style={{ fontSize: 13, color: "var(--ink-3)", lineHeight: 1.6 }}>
+                No transcript scoring data yet. Once a real transcript is ingested and scored, this section will show the computed quality dimensions and strongest transcript segments.
+              </div>
             </div>
           )}
         </section>
@@ -1344,12 +1457,136 @@ export default function Page() {
             </div>
             <button
               onClick={callAgent}
-              disabled={busy === "call" || !agentReady}
-              className={agentReady ? "forge-btn-success" : "forge-btn-primary"}
+              disabled={busy === "call" || !modeReady}
+              className={modeReady ? "forge-btn-success" : "forge-btn-primary"}
             >
               {busy === "call" ? <Loader2 size={13} className="animate-spin" /> : <Phone size={13} />}
               Live Demo Call
             </button>
+          </div>
+
+          {/* Mode Selection Cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
+            {[
+              {
+                id: "zero_shot",
+                name: "Zero-Shot Baseline",
+                desc: "Naive assistant using a generic template. No transcript conditioning or safety rubrics.",
+                ready: true,
+                statusLabel: "Always Ready",
+              },
+              {
+                id: "instant",
+                name: "Instant Bootstrap",
+                desc: "Fast transcript-conditioned harness. Matches original style & tone with soft context.",
+                ready: !!statusInfo?.instant_spec_ready,
+                statusLabel: statusInfo?.instant_spec_ready ? "Ready" : "Upload Transcripts first",
+              },
+              {
+                id: "robust",
+                name: "Robust Hardened",
+                desc: "Full Forge pipeline. Extracted persona, scored examples, ChromaDB RAG, and red-team loop.",
+                ready: !!statusInfo?.personality_spec_ready,
+                statusLabel: statusInfo?.personality_spec_ready ? "Ready" : "Run Build first",
+              },
+            ].map((m) => {
+              const isSelected = agentMode === m.id;
+              const border = isSelected
+                ? "1.5px solid var(--clay)"
+                : "1px solid var(--border)";
+              const background = isSelected
+                ? "color-mix(in srgb, var(--clay) 10%, var(--surface))"
+                : "var(--surface)";
+              return (
+                <div
+                  key={m.id}
+                  onClick={() => setAgentMode(m.id as any)}
+                  style={{
+                    background, border, borderRadius: "var(--radius-lg)",
+                    padding: 14, cursor: "pointer", display: "flex",
+                    flexDirection: "column", justifyContent: "space-between",
+                    minHeight: 140, transition: "all 0.2s",
+                  }}
+                >
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: isSelected ? "var(--ink)" : "var(--ink-2)" }}>{m.name}</span>
+                      <span style={{
+                        fontSize: 9, fontWeight: 600, padding: "1px 6px", borderRadius: 10,
+                        background: m.ready ? "rgba(34,197,94,0.1)" : "var(--border)",
+                        color: m.ready ? "var(--status-green)" : "var(--ink-3)",
+                        fontFamily: "var(--font-mono)",
+                      }}>
+                        {m.ready ? "READY" : "PENDING"}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.4, margin: 0 }}>{m.desc}</p>
+                  </div>
+                  <div style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: isSelected ? "var(--clay)" : "var(--ink-3)", marginTop: 10 }}>
+                    {m.statusLabel}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="forge-card" style={{ padding: 16, marginBottom: 16 }}>
+            <div className="forge-section-label" style={{ marginBottom: 12 }}>Mode Readiness</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
+              {[
+                {
+                  title: "Zero-Shot Baseline",
+                  status: "Always available",
+                  detail: "Uses only the generic runtime prompt. No uploaded transcript context is applied.",
+                  color: "var(--ink-3)",
+                },
+                {
+                  title: "Instant Bootstrap",
+                  status: statusInfo?.instant_spec_ready ? "Transcript-conditioned" : "No instant spec yet",
+                  detail: statusInfo?.instant_spec_ready
+                    ? "Built from uploaded transcript style and tone."
+                    : "Upload transcripts to generate an instant transcript-conditioned harness.",
+                  color: statusInfo?.instant_spec_ready ? "var(--status-amber)" : "var(--ink-3)",
+                },
+                {
+                  title: "Robust Hardened",
+                  status: statusInfo?.personality_spec_ready ? "Build artifacts ready" : "No robust build yet",
+                  detail: statusInfo?.personality_spec_ready
+                    ? "Uses extracted personality, retrieval context, and post-build runtime assets."
+                    : "Run the full build to expose real hardened-agent artifacts.",
+                  color: statusInfo?.personality_spec_ready ? "var(--status-green)" : "var(--ink-3)",
+                },
+              ].map((tier) => (
+                <div key={tier.title} style={{ borderLeft: `2.5px solid ${tier.color}`, paddingLeft: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: tier.color, marginBottom: 6 }}>{tier.title}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-2)", marginBottom: 4 }}>{tier.status}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.4 }}>{tier.detail}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
+            <div className="forge-card">
+              <div className="forge-section-label">PERSONALITY SPEC</div>
+              <div style={{ fontSize: 12, color: personalitySpec ? "var(--ink)" : "var(--ink-3)", lineHeight: 1.6 }}>
+                {personalitySpec ? "Extracted and available for robust mode." : "No real personality spec yet."}
+              </div>
+            </div>
+            <div className="forge-card">
+              <div className="forge-section-label">RETRIEVAL</div>
+              <div style={{ fontSize: 12, color: statusInfo?.rag_ready ? "var(--status-green)" : "var(--ink-3)", lineHeight: 1.6 }}>
+                {statusInfo?.rag_ready ? "Knowledge base built and ready." : "No retrieval index has been built yet."}
+              </div>
+            </div>
+            <div className="forge-card">
+              <div className="forge-section-label">RED-TEAM HISTORY</div>
+              <div style={{ fontSize: 12, color: (statusInfo?.vanguard_runs || 0) > 0 ? "var(--ink)" : "var(--ink-3)", lineHeight: 1.6 }}>
+                {(statusInfo?.vanguard_runs || 0) > 0
+                  ? `${statusInfo?.vanguard_runs || 0} Vanguard run${(statusInfo?.vanguard_runs || 0) === 1 ? "" : "s"} recorded.`
+                  : "No Vanguard runs recorded yet."}
+              </div>
+            </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
@@ -1391,7 +1628,7 @@ export default function Page() {
           {/* Chat widget */}
           <div className="forge-card">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <div className="forge-section-label">LIVE CHAT TEST</div>
+              <div className="forge-section-label">LIVE CHAT TEST ({agentMode.toUpperCase().replace(/_/g, " ")})</div>
               <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Direct NVIDIA NIM · no caching</span>
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1399,12 +1636,13 @@ export default function Page() {
                 value={chatMessage}
                 onChange={(e) => setChatMessage(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") sendChat(); }}
-                placeholder="Type a message and press Enter…"
+                placeholder={modeReady ? "Type a message and press Enter…" : `Selected mode (${agentMode}) is not ready yet.`}
+                disabled={!modeReady}
                 className="forge-input"
               />
               <button
                 onClick={sendChat}
-                disabled={!chatMessage.trim() || chatLoading}
+                disabled={!chatMessage.trim() || chatLoading || !modeReady}
                 className="forge-btn-primary"
               >
                 {chatLoading ? <Loader2 size={13} className="animate-spin" /> : "Send"}
@@ -1558,6 +1796,30 @@ export default function Page() {
               </div>
             </div>
           )}
+
+          {sessions.length > 0 && sessions.some((session) => (session.evaluation?.failure_annotations || []).length > 0) && (
+            <div className="forge-card" style={{ marginTop: 16 }}>
+              <div className="forge-section-label">FAILURE ANNOTATIONS</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10 }}>
+                {sessions
+                  .filter((session) => (session.evaluation?.failure_annotations || []).length > 0)
+                  .slice(0, 4)
+                  .map((session) => {
+                    const note = session.evaluation?.failure_annotations?.[0];
+                    return (
+                      <div key={session.session_id} style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12 }}>
+                        <div style={{ fontSize: 11, color: "var(--clay)", fontWeight: 600, marginBottom: 6 }}>
+                          {PERSONA_NAMES[session.attack_persona] || session.attack_persona}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          {note ? JSON.stringify(note, null, 2) : "No annotation text available."}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* ══════════════ IMPROVEMENT ════════════════════ */}
@@ -1650,7 +1912,7 @@ export default function Page() {
             <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 56, textAlign: "center" }}>
               <TrendingUp size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
               <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
-                No improvement cycles yet. Run Vanguard first, then run a cycle to see hardening progress.
+                No improvement history yet. This chart will stay empty until a real improvement cycle completes.
               </p>
             </div>
           )}
