@@ -247,51 +247,46 @@ async def _ingest_cekura_call_log(
     base_url: str,
     headers: dict[str, str],
 ) -> str | None:
-    messages = []
+    # Build transcript_json as a list — Cekura requires roles 'user' or 'assistant'
+    transcript_json = []
     turns = transcript.get("turns", [])
     for idx, turn in enumerate(turns):
         role_label = str(turn.get("role", "user")).lower()
-        role = "user" if role_label in {"caller", "user", "attacker", "testing agent"} else "bot"
-        messages.append({
+        role = "user" if role_label in {"caller", "user", "attacker", "testing agent"} else "assistant"
+        transcript_json.append({
             "role": role,
             "content": turn.get("text") or turn.get("content") or "",
             "start_time": idx * 5000,
-            "end_time": idx * 5000 + 3000
+            "end_time": idx * 5000 + 3000,
         })
 
+    # Confirmed-working flat payload shape (agent + call_id at top level)
     observe_payload = {
-        "agent_id": int(agent_id),
-        "calls": [
-            {
-                "call_id": session_id,
-                "startedAt": dt.datetime.utcnow().isoformat() + "Z",
-                "endedAt": (dt.datetime.utcnow() + dt.timedelta(seconds=len(turns) * 5)).isoformat() + "Z",
-                "to_phone_number": "+14155551234",
-                "from_phone_number": "+14155559876",
-                "messages": messages,
-                "metadata": {
-                    "vanguard_session_id": session_id,
-                    "attack_persona": attack_persona,
-                    "cekura_scenario_id": scenario_id,
-                },
-                "endedReason": "completed"
-            }
-        ]
+        "agent": int(agent_id),
+        "call_id": session_id,
+        "startedAt": dt.datetime.utcnow().isoformat() + "Z",
+        "endedAt": (dt.datetime.utcnow() + dt.timedelta(seconds=max(len(turns) * 5, 10))).isoformat() + "Z",
+        "to_phone_number": "+14155551234",
+        "from_phone_number": "+14155559876",
+        "transcript_json": transcript_json,
+        "metadata": {
+            "vanguard_session_id": session_id,
+            "attack_persona": attack_persona,
+            "cekura_scenario_id": scenario_id,
+        },
+        "endedReason": "completed",
     }
 
     try:
         r = await client.post(f"{base_url.rstrip('/')}/observability/v1/observe/", headers=headers, json=observe_payload)
         if r.status_code in {200, 201}:
             res_data = r.json()
+            # Response is a single call object with an 'id' field
+            if isinstance(res_data, dict):
+                return str(res_data.get("id") or res_data.get("call_id"))
             if isinstance(res_data, list) and res_data:
                 item = res_data[0]
                 return str(item.get("id") or item.get("call_id"))
-            elif isinstance(res_data, dict):
-                calls_res = res_data.get("calls")
-                if isinstance(calls_res, list) and calls_res:
-                    item = calls_res[0]
-                    return str(item.get("id") or item.get("call_id"))
-                return str(res_data.get("id") or res_data.get("call_id"))
     except Exception:
         pass
 
