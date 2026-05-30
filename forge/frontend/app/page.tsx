@@ -48,11 +48,12 @@ const PERSONA_NAMES: Record<string, string> = {
   degraded_audio:        "Degraded Audio",
 };
 
+const DISPLAY_PERSONA_LIMIT = 9;
+
 const SIDEBAR_NAV = [
   { id: "build",       label: "Build",       Icon: Zap },
-  { id: "agent",       label: "Agent",       Icon: Phone },
-  { id: "vanguard",    label: "Vanguard",    Icon: Shield },
-  { id: "improvement", label: "Improvement", Icon: TrendingUp },
+  { id: "agent",       label: "Live Call",   Icon: Phone },
+  { id: "vanguard",    label: "Robustness",  Icon: Shield },
 ] as const;
 
 function withApiKey(init: RequestInit = {}): RequestInit {
@@ -542,15 +543,13 @@ function VanguardCard({
 
 /* ─────────── Vanguard grid ──────────────────────────────── */
 function VanguardGrid({
-  suite, sessions, expectedTotal, expandedSessions, onToggleSession,
+  suite, sessions, expandedSessions, onToggleSession,
 }: {
   suite: AttackSuiteItem[];
   sessions: VanguardSession[];
-  expectedTotal: number;
   expandedSessions: Set<string>;
   onToggleSession: (id: string) => void;
 }) {
-  const sessionMap = new Map(sessions.map((s) => [s.session_id, s]));
   type Slot = { personaName: string; session: VanguardSession | null; key: string };
   let slots: Slot[];
 
@@ -624,7 +623,6 @@ export default function Page() {
   const [autoLoopCycle,       setAutoLoopCycle]       = useState(0);
   const [autoLoopRunning,     setAutoLoopRunning]     = useState(false);
   const [expandedGridSession, setExpandedGridSession] = useState<Set<string>>(new Set());
-  const [agentMode,           setAgentMode]           = useState<"zero_shot" | "instant" | "robust">("robust");
 
   const improvePollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const improveStartCount = useRef(0);
@@ -632,13 +630,6 @@ export default function Page() {
   const autoLoopCycleRef  = useRef(0);
 
   /* ── Derived ─────────────────────────────────────────── */
-  const modeReady = useMemo(() => {
-    if (agentMode === "zero_shot") return true;
-    if (agentMode === "instant") return !!statusInfo?.instant_spec_ready;
-    if (agentMode === "robust") return !!statusInfo?.personality_spec_ready;
-    return false;
-  }, [agentMode, statusInfo]);
-
   const chartData = useMemo(() => {
     const passRates = dashboard.pass_rate_history || [];
     const sizes     = dashboard.attack_suite_history || [];
@@ -674,7 +665,7 @@ export default function Page() {
   const passRate        = total ? Math.round((passed / total) * 100) : 0;
   const vanguardRunning = !!runId && total > 0 && (passed + (activeRun?.failed || 0)) < total;
   const isFineTuneReady = !!dashboard.adapter_id;
-  const agentReady = systemStatusColor === "green";
+  const agentReady = !!statusInfo?.personality_spec_ready;
 
   const statusItems = useMemo(() => [
     { key: "personality", label: "Personality", ready: statusInfo?.personality_spec_ready || false },
@@ -698,6 +689,12 @@ export default function Page() {
   const sessions        = activeRun?.sessions || [];
   const hasBuildInput   = ingestMode === "files" ? files.length > 0 : rawTranscriptText.trim().length > 0;
   const transcriptHighlights = transcriptScores?.top_k_turns?.slice(0, 3) || [];
+  const displayAttackSuite = useMemo(() => attackSuite.slice(0, DISPLAY_PERSONA_LIMIT), [attackSuite]);
+  const displaySessions = useMemo(() => sessions.slice(0, DISPLAY_PERSONA_LIMIT), [sessions]);
+  const robustnessScore = passRate;
+  const priorPoint = chartData.length > 1 ? chartData[chartData.length - 2] : null;
+  const robustnessDelta = priorPoint?.passRate != null ? Math.round(robustnessScore - priorPoint.passRate) : null;
+  const projectedGoal = Math.max(95, robustnessScore);
 
   function getActiveStepIndex(stage: string | null): number | null {
     if (!stage) return null;
@@ -721,6 +718,21 @@ export default function Page() {
     try {
       const res = await fetch(`${API_BASE}/users/${USER_ID}/dashboard`, withApiKey());
       if (res.ok) setDashboard(await res.json());
+    } catch { /* silent */ }
+  }
+  async function fetchBuildStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/build/status`, withApiKey());
+      if (!res.ok) return;
+      const status: BuildStatus = await res.json();
+      if (!status?.job_id) return;
+      setBuildJobId(status.job_id);
+      setBuildStage(status.stage || null);
+      if (status.status === "completed") {
+        setCompletedSteps(BUILD_STEPS);
+      } else if (status.status === "failed" && status.error) {
+        setError(status.error);
+      }
     } catch { /* silent */ }
   }
   async function fetchTranscriptScores() {
@@ -764,14 +776,14 @@ export default function Page() {
   }
   async function callAgent() {
     setBusy("call"); setError(null);
-    if (!modeReady) {
+    if (!agentReady) {
       setBusy(null);
-      setError(`The selected agent mode (${agentMode}) is not ready yet.`);
+      setError("Build must complete before starting the live demo call.");
       return;
     }
     const roomWindow = window.open("", "_blank", "noopener,noreferrer");
     try {
-      const res = await fetch(`${API_BASE}/users/${USER_ID}/call?mode=${agentMode}`, withApiKey({ method: "POST" }));
+      const res = await fetch(`${API_BASE}/users/${USER_ID}/call?mode=robust`, withApiKey({ method: "POST" }));
       if (!res.ok) throw new Error("Call agent failed");
       const payload = await res.json();
       setCallInfo(payload);
@@ -800,6 +812,13 @@ export default function Page() {
       setExpandedSessions(new Set());
       setExpandedGridSession(new Set());
     } catch (e) { setError(String(e)); } finally { setBusy(null); }
+  }
+  async function runRobustnessLoop() {
+    setAutoLoopActive(true);
+    autoLoopActiveRef.current = true;
+    autoLoopCycleRef.current = 0;
+    setAutoLoopCycle(0);
+    await launchAttack();
   }
   function toggleAutoLoop() {
     const next = !autoLoopActive;
@@ -834,7 +853,7 @@ export default function Page() {
       const res = await fetch(`${API_BASE}/chat`, withApiKey({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatMessage, user_id: USER_ID, mode: agentMode }),
+        body: JSON.stringify({ message: chatMessage, user_id: USER_ID, mode: "robust" }),
       }));
       if (!res.ok) throw new Error("Chat request failed");
       const data = await res.json();
@@ -844,7 +863,7 @@ export default function Page() {
 
   /* ── Effects ─────────────────────────────────────────── */
   useEffect(() => {
-    fetchStatus(); refreshDashboard(); fetchTranscriptScores();
+    fetchStatus(); refreshDashboard(); fetchTranscriptScores(); fetchBuildStatus();
     const st = setInterval(fetchStatus, 30000);
     const dt = setInterval(refreshDashboard, 15000);
     return () => { clearInterval(st); clearInterval(dt); };
@@ -1457,120 +1476,24 @@ export default function Page() {
             </div>
             <button
               onClick={callAgent}
-              disabled={busy === "call" || !modeReady}
-              className={modeReady ? "forge-btn-success" : "forge-btn-primary"}
+              disabled={busy === "call" || !agentReady}
+              className={agentReady ? "forge-btn-success" : "forge-btn-primary"}
             >
               {busy === "call" ? <Loader2 size={13} className="animate-spin" /> : <Phone size={13} />}
               Live Demo Call
             </button>
           </div>
 
-          {/* Mode Selection Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
-            {[
-              {
-                id: "zero_shot",
-                name: "Zero-Shot Baseline",
-                desc: "Naive assistant using a generic template. No transcript conditioning or safety rubrics.",
-                ready: true,
-                statusLabel: "Always Ready",
-              },
-              {
-                id: "instant",
-                name: "Instant Bootstrap",
-                desc: "Fast transcript-conditioned harness. Matches original style & tone with soft context.",
-                ready: !!statusInfo?.instant_spec_ready,
-                statusLabel: statusInfo?.instant_spec_ready ? "Ready" : "Upload Transcripts first",
-              },
-              {
-                id: "robust",
-                name: "Robust Hardened",
-                desc: "Full Forge pipeline. Extracted persona, scored examples, ChromaDB RAG, and red-team loop.",
-                ready: !!statusInfo?.personality_spec_ready,
-                statusLabel: statusInfo?.personality_spec_ready ? "Ready" : "Run Build first",
-              },
-            ].map((m) => {
-              const isSelected = agentMode === m.id;
-              const border = isSelected
-                ? "1.5px solid var(--clay)"
-                : "1px solid var(--border)";
-              const background = isSelected
-                ? "color-mix(in srgb, var(--clay) 10%, var(--surface))"
-                : "var(--surface)";
-              return (
-                <div
-                  key={m.id}
-                  onClick={() => setAgentMode(m.id as any)}
-                  style={{
-                    background, border, borderRadius: "var(--radius-lg)",
-                    padding: 14, cursor: "pointer", display: "flex",
-                    flexDirection: "column", justifyContent: "space-between",
-                    minHeight: 140, transition: "all 0.2s",
-                  }}
-                >
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: isSelected ? "var(--ink)" : "var(--ink-2)" }}>{m.name}</span>
-                      <span style={{
-                        fontSize: 9, fontWeight: 600, padding: "1px 6px", borderRadius: 10,
-                        background: m.ready ? "rgba(34,197,94,0.1)" : "var(--border)",
-                        color: m.ready ? "var(--status-green)" : "var(--ink-3)",
-                        fontFamily: "var(--font-mono)",
-                      }}>
-                        {m.ready ? "READY" : "PENDING"}
-                      </span>
-                    </div>
-                    <p style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.4, margin: 0 }}>{m.desc}</p>
-                  </div>
-                  <div style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: isSelected ? "var(--clay)" : "var(--ink-3)", marginTop: 10 }}>
-                    {m.statusLabel}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="forge-card" style={{ padding: 16, marginBottom: 16 }}>
-            <div className="forge-section-label" style={{ marginBottom: 12 }}>Mode Readiness</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
-              {[
-                {
-                  title: "Zero-Shot Baseline",
-                  status: "Always available",
-                  detail: "Uses only the generic runtime prompt. No uploaded transcript context is applied.",
-                  color: "var(--ink-3)",
-                },
-                {
-                  title: "Instant Bootstrap",
-                  status: statusInfo?.instant_spec_ready ? "Transcript-conditioned" : "No instant spec yet",
-                  detail: statusInfo?.instant_spec_ready
-                    ? "Built from uploaded transcript style and tone."
-                    : "Upload transcripts to generate an instant transcript-conditioned harness.",
-                  color: statusInfo?.instant_spec_ready ? "var(--status-amber)" : "var(--ink-3)",
-                },
-                {
-                  title: "Robust Hardened",
-                  status: statusInfo?.personality_spec_ready ? "Build artifacts ready" : "No robust build yet",
-                  detail: statusInfo?.personality_spec_ready
-                    ? "Uses extracted personality, retrieval context, and post-build runtime assets."
-                    : "Run the full build to expose real hardened-agent artifacts.",
-                  color: statusInfo?.personality_spec_ready ? "var(--status-green)" : "var(--ink-3)",
-                },
-              ].map((tier) => (
-                <div key={tier.title} style={{ borderLeft: `2.5px solid ${tier.color}`, paddingLeft: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: tier.color, marginBottom: 6 }}>{tier.title}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-2)", marginBottom: 4 }}>{tier.status}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.4 }}>{tier.detail}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr", gap: 12, marginBottom: 16 }}>
             <div className="forge-card">
-              <div className="forge-section-label">PERSONALITY SPEC</div>
-              <div style={{ fontSize: 12, color: personalitySpec ? "var(--ink)" : "var(--ink-3)", lineHeight: 1.6 }}>
-                {personalitySpec ? "Extracted and available for robust mode." : "No real personality spec yet."}
+              <div className="forge-section-label">LIVE AGENT STATUS</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: agentReady ? "var(--status-green)" : "var(--ink)", marginBottom: 8 }}>
+                {agentReady ? "Ready for transcript-trained live call" : "Build required before live call"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.6 }}>
+                {agentReady
+                  ? "The Gemini Live harness is configured from your transcript-derived persona and retrieval context."
+                  : "Paste a transcript and run the build. Once personality extraction and retrieval are ready, the call room becomes your live demo surface."}
               </div>
             </div>
             <div className="forge-card">
@@ -1580,11 +1503,9 @@ export default function Page() {
               </div>
             </div>
             <div className="forge-card">
-              <div className="forge-section-label">RED-TEAM HISTORY</div>
+              <div className="forge-section-label">PERSONALITY</div>
               <div style={{ fontSize: 12, color: (statusInfo?.vanguard_runs || 0) > 0 ? "var(--ink)" : "var(--ink-3)", lineHeight: 1.6 }}>
-                {(statusInfo?.vanguard_runs || 0) > 0
-                  ? `${statusInfo?.vanguard_runs || 0} Vanguard run${(statusInfo?.vanguard_runs || 0) === 1 ? "" : "s"} recorded.`
-                  : "No Vanguard runs recorded yet."}
+                {personalitySpec ? "Transcript personality extracted and applied to the live harness." : "No transcript-derived personality spec yet."}
               </div>
             </div>
           </div>
@@ -1628,7 +1549,7 @@ export default function Page() {
           {/* Chat widget */}
           <div className="forge-card">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <div className="forge-section-label">LIVE CHAT TEST ({agentMode.toUpperCase().replace(/_/g, " ")})</div>
+              <div className="forge-section-label">LIVE CHAT TEST</div>
               <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Direct NVIDIA NIM · no caching</span>
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1636,13 +1557,13 @@ export default function Page() {
                 value={chatMessage}
                 onChange={(e) => setChatMessage(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") sendChat(); }}
-                placeholder={modeReady ? "Type a message and press Enter…" : `Selected mode (${agentMode}) is not ready yet.`}
-                disabled={!modeReady}
+                placeholder={agentReady ? "Type a message and press Enter…" : "Run the build first to test the live harness."}
+                disabled={!agentReady}
                 className="forge-input"
               />
               <button
                 onClick={sendChat}
-                disabled={!chatMessage.trim() || chatLoading || !modeReady}
+                disabled={!chatMessage.trim() || chatLoading || !agentReady}
                 className="forge-btn-primary"
               >
                 {chatLoading ? <Loader2 size={13} className="animate-spin" /> : "Send"}
@@ -1681,43 +1602,35 @@ export default function Page() {
                 <Shield size={15} color="var(--status-red)" />
               </div>
               <div>
-                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Vanguard</h2>
-                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Adversarial attack suite · red-team evaluation</p>
+                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 600, color: "var(--ink)", margin: 0, lineHeight: 1.2 }}>Robustness Loop</h2>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0, marginTop: 2 }}>Adversarial attacks + continuous improvement</p>
               </div>
               {vanguardRunning && <div className="live-badge"><div className="live-dot" />LIVE</div>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button
-                onClick={toggleAutoLoop}
-                title={autoLoopActive ? "Auto-loop ON" : "Enable auto-improvement loop"}
-                className={`forge-btn-secondary ${autoLoopActive ? "active" : ""}`}
-              >
-                <Activity size={13} />
-                Auto-loop {autoLoopActive ? "ON" : "OFF"}
-              </button>
-              <button
-                onClick={launchAttack}
-                disabled={busy === "attack"}
+                onClick={runRobustnessLoop}
+                disabled={busy === "attack" || busy === "improve"}
                 className="forge-btn-primary"
               >
-                {busy === "attack" ? <Loader2 size={13} className="animate-spin" /> : <Shield size={13} />}
-                Launch Attack
+                {(busy === "attack" || busy === "improve") ? <Loader2 size={13} className="animate-spin" /> : <Activity size={13} />}
+                Run Robustness Improvement Loop
               </button>
             </div>
           </div>
 
           {/* Stats bar */}
           {total > 0 && (
-            <div className="forge-card" style={{ display: "flex", alignItems: "center", gap: 20, padding: "14px 20px", marginBottom: 16 }}>
+            <div className="forge-card" style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto auto", alignItems: "center", gap: 20, padding: "14px 20px", marginBottom: 16 }}>
               <PassRateRing rate={passRate} size={68} />
               <div>
                 <div style={{
                   fontSize: 32, fontWeight: 800, fontFamily: "var(--font-mono)", lineHeight: 1,
-                  color: passRate >= 60 ? "var(--status-green)" : "var(--status-red)",
+                  color: robustnessScore >= 60 ? "var(--status-green)" : "var(--status-red)",
                 }}>
-                  {passRate}%
+                  {robustnessScore}%
                 </div>
-                <div style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: passRate >= 60 ? "var(--status-green)" : "var(--status-red)", marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: robustnessScore >= 60 ? "var(--status-green)" : "var(--status-red)", marginTop: 4 }}>
                   {passed} of {total} passed
                   {vanguardRunning && (
                     <span style={{ color: "var(--status-amber)", fontFamily: "var(--font-mono)", fontSize: 12, marginLeft: 10, display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -1727,12 +1640,20 @@ export default function Page() {
                   )}
                 </div>
               </div>
-              {dashboard.attack_suite_size != null && dashboard.attack_suite_size > 0 && (
-                <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-mono)" }}>{dashboard.attack_suite_size}</div>
-                  <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>attack variants</div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: robustnessDelta != null && robustnessDelta >= 0 ? "var(--status-green)" : "var(--status-red)", fontFamily: "var(--font-mono)" }}>
+                  {robustnessDelta == null ? "—" : `${robustnessDelta > 0 ? "+" : ""}${robustnessDelta}`}
                 </div>
-              )}
+                <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>delta vs last run</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-mono)" }}>{cyclesRun}</div>
+                <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>improvement cycles</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-mono)" }}>{displayAttackSuite.length}</div>
+                <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>visible personas</div>
+              </div>
             </div>
           )}
 
@@ -1759,19 +1680,96 @@ export default function Page() {
           </AnimatePresence>
 
           {/* Attack grid */}
-          {(sessions.length > 0 || attackSuite.length > 0 || (runId && total > 0)) ? (
+          {(displaySessions.length > 0 || displayAttackSuite.length > 0 || (runId && total > 0)) ? (
             <VanguardGrid
-              suite={attackSuite} sessions={sessions} expectedTotal={total}
+              suite={displayAttackSuite} sessions={displaySessions}
               expandedSessions={expandedGridSession} onToggleSession={toggleGridSession}
             />
           ) : (
             <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 48, textAlign: "center" }}>
               <Shield size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
               <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
-                No sessions yet. Click &ldquo;Launch Attack&rdquo; to begin adversarial testing.
+                No robustness sessions yet. Run the loop to launch the 9 demo personas and start measuring robustness.
               </p>
             </div>
           )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 16, marginTop: 16 }}>
+            <div>
+              {chartData.length > 0 ? (
+                <>
+                  <div style={{ height: 288, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16, marginBottom: 14 }}>
+                    <ImprovementChartNoSsr data={chartData} />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {chartData.map((point) => {
+                      const histItem  = dashboard.pass_rate_history?.find((h) => h.cycle === point.cycle);
+                      const regPassed = histItem?.regression_passed;
+                      const pr        = point.passRate != null ? Math.round(point.passRate) : null;
+                      return (
+                        <div key={point.cycle} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          padding: "8px 14px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12,
+                        }}>
+                          <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Cycle {point.cycle}</span>
+                          <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
+                            {regPassed !== undefined && (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: regPassed ? "var(--status-green)" : "var(--status-red)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                                Gate {regPassed ? "✓" : "✗"}
+                              </span>
+                            )}
+                            <span style={{ color: "var(--clay)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                              {pr != null ? `${pr}%` : "—"} robust
+                            </span>
+                            <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
+                              {point.suiteSize ?? "—"} variants
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 56, textAlign: "center" }}>
+                  <TrendingUp size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
+                  <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
+                    No robustness history yet. This graph will show adversarial pass rate climbing over repeated loop runs.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="forge-card">
+                <div className="forge-section-label">ROBUSTNESS SCORE</div>
+                <div style={{ fontSize: 44, fontWeight: 800, color: robustnessScore >= 80 ? "var(--status-green)" : robustnessScore >= 60 ? "var(--status-amber)" : "var(--status-red)", fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                  {robustnessScore}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>
+                  Latest measured adversarial pass rate. This is the headline metric we want to push from the 80s into the mid 90s.
+                </div>
+              </div>
+              <div className="forge-card">
+                <div className="forge-section-label">LOOP EXPLAINS</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12, color: "var(--ink-2)" }}>
+                  <div><strong>Attack:</strong> 9 attacker personas probe the live voice agent.</div>
+                  <div><strong>Evaluate:</strong> Cekura observability + rubric scoring capture failures.</div>
+                  <div><strong>Improve:</strong> the next cycle hardens prompts and the attack suite.</div>
+                </div>
+              </div>
+              <div className="forge-card">
+                <div className="forge-section-label">TARGET TRAJECTORY</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {[80, 89, 91, 92, projectedGoal].map((value, index) => (
+                    <div key={`${value}-${index}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ color: "var(--ink-3)" }}>Run {index + 1}</span>
+                      <span style={{ color: value >= robustnessScore ? "var(--ink)" : "var(--status-green)", fontWeight: 700 }}>{value}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Worst personas */}
           {worstPersonas.length > 0 && (
@@ -1822,101 +1820,6 @@ export default function Page() {
           )}
         </section>
 
-        {/* ══════════════ IMPROVEMENT ════════════════════ */}
-        <section id="improvement" style={{ marginBottom: 64, scrollMarginTop: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{
-                width: 32, height: 32, borderRadius: 9,
-                background: "var(--clay-tint)",
-                border: "1px solid rgba(180, 90, 53, 0.35)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <TrendingUp size={15} color="var(--clay-deep)" />
-              </div>
-              <div>
-                <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--ink)", margin: 0, fontWeight: 600, lineHeight: 1.2 }}>Improvement Curve</h2>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
-                  <p style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)", margin: 0 }}>RL hardening · pass rate over iterations</p>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--ink-3)" }}>
-                    ({cyclesRun} cycle{cyclesRun !== 1 ? "s" : ""} run)
-                  </span>
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={improve}
-              disabled={busy === "improve"}
-              className="forge-btn-primary"
-            >
-              {busy === "improve" ? <Loader2 size={13} className="animate-spin" /> : <Activity size={13} />}
-              Run Cycle
-            </button>
-          </div>
-
-          <AnimatePresence>
-            {improvementRunning && (
-              <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.3)",
-                  borderRadius: "var(--radius-md)", padding: "10px 16px", marginBottom: 16,
-                }}
-              >
-                <Loader2 size={13} className="animate-spin" color="var(--clay)" />
-                <span style={{ fontSize: 13, color: "var(--clay-deep)" }}>
-                  Improvement cycle running — results will appear when complete.
-                </span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {chartData.length > 0 ? (
-            <>
-              <div style={{ height: 288, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16, marginBottom: 14 }}>
-                <ImprovementChartNoSsr data={chartData} />
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {chartData.map((point) => {
-                  const histItem  = dashboard.pass_rate_history?.find((h) => h.cycle === point.cycle);
-                  const regPassed = histItem?.regression_passed;
-                  const pr        = point.passRate != null ? Math.round(point.passRate) : null;
-                  return (
-                    <div key={point.cycle} style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "8px 14px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12,
-                    }}>
-                      <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>Cycle {point.cycle}</span>
-                      <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
-                        {regPassed !== undefined && (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: regPassed ? "var(--status-green)" : "var(--status-red)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
-                            Gate {regPassed ? "✓" : "✗"}
-                          </span>
-                        )}
-                        <span style={{ color: "var(--clay)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-                          {pr != null ? `${pr}%` : "—"} pass
-                        </span>
-                        <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
-                          {point.suiteSize ?? "—"} variants
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "var(--radius-lg)", padding: 56, textAlign: "center" }}>
-              <TrendingUp size={32} style={{ color: "var(--ink-3)", marginBottom: 12, display: "inline-block" }} />
-              <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0 }}>
-                No improvement history yet. This chart will stay empty until a real improvement cycle completes.
-              </p>
-            </div>
-          )}
-        </section>
       </main>
     </div>
   );
