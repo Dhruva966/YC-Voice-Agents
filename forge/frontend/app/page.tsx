@@ -283,8 +283,6 @@ const ImprovementChartNoSsr = dynamic(() => Promise.resolve(ImprovementChart), {
 
 /* ─────────── PersonalityConstellation (no-SSR) ─────────── */
 function PersonalityConstellation({ scores }: { scores: DimensionScoreCard | null }) {
-  const [revealed, setRevealed] = useState(0);
-
   const data = useMemo(() => {
     if (!scores) return [];
     return Object.entries(scores).map(([key, val]) => ({
@@ -295,38 +293,22 @@ function PersonalityConstellation({ scores }: { scores: DimensionScoreCard | nul
     }));
   }, [scores]);
 
-  const animatedData = data.map((d, i) => ({ ...d, value: i < revealed ? d.value : 0 }));
-
-  useEffect(() => {
-    if (data.length === 0) { setRevealed(0); return; }
-    setRevealed(0);
-    let count = 0;
-    let cancelled = false;
-    const t = setInterval(() => {
-      if (cancelled) return;
-      count = Math.min(count + 1, data.length);
-      setRevealed(count);
-      if (count >= data.length) clearInterval(t);
-    }, 220);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [data.length]);
-
-  if (!scores) return null;
+  if (!scores || data.length === 0) return null;
   return (
     <div style={{
       background: "var(--surface)", border: "1px solid var(--border)",
       borderRadius: "var(--radius-lg)", padding: 16, marginBottom: 20,
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <div className="forge-section-label">PERSONALITY CONSTELLATION</div>
+        <div className="forge-section-label">PERSONALITY DIMENSIONS</div>
         <span style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>
-          {revealed}/{data.length} dimensions mapped
+          {data.length} dimensions from transcript
         </span>
       </div>
       <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
         <div style={{ flex: "0 0 220px", height: 200 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <RadarChart data={animatedData} margin={{ top: 8, right: 16, bottom: 8, left: 16 }}>
+            <RadarChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 16 }}>
               <PolarGrid stroke="var(--border)" />
               <PolarAngleAxis dataKey="dimension" tick={{ fill: "var(--ink-3)", fontSize: 9, fontFamily: "var(--font-mono)" }} />
               <Radar name="Score" dataKey="value" stroke="var(--clay)" fill="var(--clay)" fillOpacity={0.18} strokeWidth={2} />
@@ -334,33 +316,29 @@ function PersonalityConstellation({ scores }: { scores: DimensionScoreCard | nul
           </ResponsiveContainer>
         </div>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
-          <AnimatePresence>
-            {data.slice(0, revealed).map((d, i) => {
-              const color = d.value >= 70 ? "var(--status-green)" : d.value >= 40 ? "var(--status-amber)" : "var(--status-red)";
-              return (
-                <motion.div key={d.dimension} initial={{ opacity: 0, x: 14 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.26 }}
-                  style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{
-                    width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                    background: `color-mix(in srgb, ${color} 14%, var(--surface-2))`,
-                    border: `1.5px solid ${color}55`,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 8, fontWeight: 700, fontFamily: "var(--font-mono)", color,
-                  }}>{d.abbr}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                      <span style={{ fontSize: 11, color: "var(--ink)", fontWeight: 500 }}>{d.dimension}</span>
-                      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700, color }}>{d.value}%</span>
-                    </div>
-                    <div style={{ height: 3, background: "var(--border)", borderRadius: 2 }}>
-                      <motion.div initial={{ width: 0 }} animate={{ width: `${d.value}%` }} transition={{ duration: 0.5, delay: 0.1 }}
-                        style={{ height: "100%", background: `linear-gradient(90deg,${color}60,${color})`, borderRadius: 2 }} />
-                    </div>
+          {data.map((d) => {
+            const color = d.value >= 70 ? "var(--status-green)" : d.value >= 40 ? "var(--status-amber)" : "var(--status-red)";
+            return (
+              <div key={d.dimension} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                  background: `color-mix(in srgb, ${color} 14%, var(--surface-2))`,
+                  border: `1.5px solid ${color}55`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 8, fontWeight: 700, fontFamily: "var(--font-mono)", color,
+                }}>{d.abbr}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, color: "var(--ink)", fontWeight: 500 }}>{d.dimension}</span>
+                    <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700, color }}>{d.value}%</span>
                   </div>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
+                  <div style={{ height: 3, background: "var(--border)", borderRadius: 2 }}>
+                    <div style={{ width: `${d.value}%`, height: "100%", background: `linear-gradient(90deg,${color}60,${color})`, borderRadius: 2 }} />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -642,32 +620,11 @@ function VanguardGrid({
 
 /* ─────────── Transcript Stream Panel ───────────────────── */
 function TranscriptStreamPanel({
-  turns, isActive, loading,
+  turns,
 }: {
   turns: Array<{ caller: string; agent: string; aggregate: number }>;
-  isActive: boolean;
-  loading?: boolean;
 }) {
-  const [shownCount, setShownCount] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (loading || turns.length === 0) { setShownCount(0); return; }
-    setShownCount(0);
-    let count = 0;
-    let cancelled = false;
-    const t = setInterval(() => {
-      if (cancelled) return;
-      count = Math.min(count + 1, turns.length);
-      setShownCount(count);
-      if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      if (count >= turns.length) clearInterval(t);
-    }, isActive ? 500 : 800);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [turns, isActive, loading]);
-
-  const progress = turns.length > 0 ? Math.round((shownCount / turns.length) * 100) : 0;
-
+  if (turns.length === 0) return null;
   return (
     <div style={{
       background: "var(--surface)", border: "1px solid var(--border)",
@@ -678,68 +635,41 @@ function TranscriptStreamPanel({
         padding: "10px 16px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{
-            width: 7, height: 7, borderRadius: "50%",
-            background: loading || isActive ? "var(--status-amber)" : "var(--status-green)",
-            animation: (loading || isActive) ? "pulse-dot 1.4s ease-in-out infinite" : "none",
-          }} />
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--status-green)" }} />
           <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", letterSpacing: "0.12em", color: "var(--ink-3)", fontWeight: 600, textTransform: "uppercase" }}>
-            {loading ? "Scanning Transcripts…" : isActive ? "Analyzing Transcript Quality" : "Golden Segments"}
+            Top-Scored Transcript Turns
           </span>
         </div>
-        {!loading && turns.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>{shownCount}/{turns.length}</span>
-            <div style={{ width: 72, height: 3, background: "var(--border)", borderRadius: 2 }}>
-              <div style={{ width: `${progress}%`, height: "100%", background: "linear-gradient(90deg,var(--clay),var(--status-amber))", borderRadius: 2, transition: "width 0.25s" }} />
+        <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--ink-3)" }}>
+          {turns.length} golden segments
+        </span>
+      </div>
+      <div style={{ height: 260, overflowY: "auto", padding: "12px 16px", scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" }}>
+        {turns.map((turn, i) => (
+          <div key={i} style={{ marginBottom: 12 }}>
+            <div style={{ marginBottom: 3 }}>
+              <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--status-amber)", letterSpacing: "0.07em", textTransform: "uppercase" }}>CALLER </span>
+              <div style={{
+                display: "inline-block",
+                background: "color-mix(in srgb, var(--status-amber) 7%, var(--surface))",
+                border: "1px solid color-mix(in srgb, var(--status-amber) 18%, transparent)",
+                borderRadius: "0 var(--radius-sm) var(--radius-sm) var(--radius-sm)",
+                padding: "5px 10px", fontSize: 12, color: "var(--ink)", lineHeight: 1.5, maxWidth: "82%",
+              }}>{turn.caller}</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+              <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--clay)", letterSpacing: "0.07em", textTransform: "uppercase" }}>AGENT</span>
+              <div style={{
+                background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.22)",
+                borderRadius: "var(--radius-sm) 0 var(--radius-sm) var(--radius-sm)",
+                padding: "5px 10px", fontSize: 12, color: "var(--ink)", lineHeight: 1.5, maxWidth: "82%", textAlign: "right",
+              }}>{turn.agent}</div>
+              <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", marginTop: 2, color: turn.aggregate >= 7 ? "var(--status-green)" : turn.aggregate >= 4 ? "var(--status-amber)" : "var(--status-red)" }}>
+                quality {turn.aggregate.toFixed(1)}
+              </span>
             </div>
           </div>
-        )}
-      </div>
-      <div ref={containerRef} style={{ height: 260, overflowY: "auto", padding: "12px 16px", scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" }}>
-        {loading ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {[0.7, 0.9, 0.6, 0.85, 0.75].map((w, i) => (
-              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <div style={{ height: 10, width: `${w * 60}%`, background: "var(--surface-2)", borderRadius: 3, animation: `pulse-dot 2s ease-in-out ${i * 0.18}s infinite` }} />
-                <div style={{ height: 10, width: `${w * 78}%`, alignSelf: "flex-end", background: "var(--clay-tint)", borderRadius: 3, animation: `pulse-dot 2s ease-in-out ${i * 0.18 + 0.3}s infinite` }} />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <AnimatePresence initial={false}>
-            {turns.slice(0, shownCount).map((turn, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} style={{ marginBottom: 12 }}>
-                <div style={{ marginBottom: 3 }}>
-                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--status-amber)", letterSpacing: "0.07em", textTransform: "uppercase" }}>CALLER </span>
-                  <div style={{
-                    display: "inline-block",
-                    background: "color-mix(in srgb, var(--status-amber) 7%, var(--surface))",
-                    border: "1px solid color-mix(in srgb, var(--status-amber) 18%, transparent)",
-                    borderRadius: "0 var(--radius-sm) var(--radius-sm) var(--radius-sm)",
-                    padding: "5px 10px", fontSize: 12, color: "var(--ink)", lineHeight: 1.5, maxWidth: "82%",
-                  }}>{turn.caller}</div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--clay)", letterSpacing: "0.07em", textTransform: "uppercase" }}>AGENT</span>
-                  <div style={{
-                    background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.22)",
-                    borderRadius: "var(--radius-sm) 0 var(--radius-sm) var(--radius-sm)",
-                    padding: "5px 10px", fontSize: 12, color: "var(--ink)", lineHeight: 1.5, maxWidth: "82%", textAlign: "right",
-                  }}>{turn.agent}</div>
-                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", marginTop: 2, color: turn.aggregate >= 7 ? "var(--status-green)" : turn.aggregate >= 4 ? "var(--status-amber)" : "var(--status-red)" }}>
-                    quality {turn.aggregate.toFixed(1)}
-                  </span>
-                </div>
-              </motion.div>
-            ))}
-            {(isActive || shownCount < turns.length) && turns.length > 0 && (
-              <motion.div key="cursor" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                <div style={{ display: "inline-block", width: 8, height: 14, background: "var(--clay)", borderRadius: 1, animation: "pulse-dot 0.9s ease-in-out infinite" }} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -869,23 +799,6 @@ function BattleArena({ session, isRunning }: { session: VanguardSession | null; 
               </motion.div>
             );
           })}
-          {isRunning && (
-            <motion.div key="typing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              style={{ display: "flex", justifyContent: "flex-end" }}>
-              <div style={{
-                display: "flex", gap: 4, padding: "8px 12px",
-                background: "var(--clay-tint)", border: "1px solid rgba(180,90,53,0.24)",
-                borderRadius: "var(--radius-sm) 0 var(--radius-sm) var(--radius-sm)", alignItems: "center",
-              }}>
-                {[0, 1, 2].map((j) => (
-                  <div key={j} style={{
-                    width: 5, height: 5, borderRadius: "50%", background: "var(--clay)",
-                    animation: `pulse-dot 1.2s ease-in-out ${j * 0.2}s infinite`,
-                  }} />
-                ))}
-              </div>
-            </motion.div>
-          )}
         </AnimatePresence>
       </div>
     </motion.div>
@@ -1578,13 +1491,9 @@ export default function Page() {
             })}
           </div>
 
-          {/* Transcript stream panel */}
-          {(buildJobId !== null || (transcriptScores?.top_k_turns?.length ?? 0) > 0) && (
-            <TranscriptStreamPanel
-              turns={transcriptScores?.top_k_turns || []}
-              isActive={buildJobId !== null}
-              loading={buildJobId !== null && !transcriptScores}
-            />
+          {/* Transcript stream panel — only shown when real scored turns exist */}
+          {(transcriptScores?.top_k_turns?.length ?? 0) > 0 && (
+            <TranscriptStreamPanel turns={transcriptScores!.top_k_turns} />
           )}
 
           {/* Status grid */}
