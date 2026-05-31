@@ -6,7 +6,7 @@
 
 <div align="center">
 
-## ▶&nbsp;&nbsp;[Watch Demo &mdash; 60 seconds](VIDEO_LINK_HERE)
+## ▶&nbsp;&nbsp;[Watch Demo &mdash; 60 seconds](https://youtube.com/watch?v=HEo9ogVsdu0&feature=youtu.be)
 
 </div>
 
@@ -54,7 +54,7 @@ flowchart LR
 
 ## 2&nbsp;&nbsp;Demo
 
-> **[▶ 60-second demo — VIDEO_LINK_HERE](VIDEO_LINK_HERE)**
+> **[▶ 60-second demo](https://youtube.com/watch?v=HEo9ogVsdu0&feature=youtu.be)**
 >
 > Shows: transcript upload → build pipeline → live Twilio call → Vanguard attack sessions firing → Cekura scores → improvement curve from 46% → 80%+
 
