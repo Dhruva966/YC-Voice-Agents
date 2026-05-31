@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./assets/banner.svg" alt="Forge — Pre-production security gate for lending voice agents" width="100%" />
+  <img src="./assets/logo.png" alt="Forge — Pre-production security gate for lending voice agents" width="60%" />
 </div>
 
 <br/>
